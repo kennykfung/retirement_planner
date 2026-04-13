@@ -1,0 +1,163 @@
+# ================================================================
+#  RETIREMENT PLANNER — INPUT CONFIGURATION
+# ================================================================
+#  Edit this file with your financial details, then run:
+#
+#      python retirement_planner.py
+#
+#  The script will generate:  retirement_report.html
+#  Open that file in any browser — works completely OFFLINE.
+#
+#  Lines starting with # are comments and are ignored.
+#  Leave a field blank to use its default value.
+# ================================================================
+
+
+[personal]
+name                = Jim
+birthday            = 01/01/1979  # MM/DD/YYYY — current age is calculated automatically
+retirement_age      = 65
+life_expectancy     = 90
+has_spouse          = true       # true or false
+
+
+[spouse]
+# Only used when has_spouse = true
+name                = Jane
+birthday            = 01/01/1979  # MM/DD/YYYY
+retirement_age      = 65
+life_expectancy     = 92
+
+
+[social_security]
+# Find your estimate at ssa.gov/myaccount
+# Enter the MONTHLY dollar amount at Full Retirement Age (FRA)
+# FRA = age 67 for anyone born in 1960 or later
+#
+# Spousal benefit is calculated automatically:
+# If spouse's own benefit < 50% of your PIA, the higher spousal amount applies.
+
+your_monthly_pia       = 4500    # Your PIA (Primary Insurance Amount)
+your_claiming_age      = 67      # Age you plan to start SS (62–70)
+
+spouse_monthly_pia     = 0       # Enter 0 if spouse has no SS record
+spouse_claiming_age    = 67      # Spouse's planned claiming age
+
+
+[income]
+# Current annual GROSS income (today's dollars) — used to determine your current
+# tax bracket and guide Roth conversion timing advice.
+your_annual_income           = 150000   # Your current gross salary / self-employment income
+spouse_annual_income         = 0        # Spouse's current gross income (0 if not working)
+
+# Annual dollar amounts (today's dollars)
+your_annual_pension         = 0
+spouse_annual_pension       = 0
+pension_start_age           = 65
+
+other_annual_income         = 0  # Rental, part-time work, etc.
+other_income_stop_age       =    # Leave blank if income continues indefinitely
+
+
+[accounts]
+# ---- YOUR ACCOUNTS ----
+# Enter current balances today.
+
+trad_401k           = 650000     # Traditional 401(k) / 403(b) — Pre-tax, RMDs at 73
+trad_ira            = 0          # Traditional IRA / SEP-IRA   — Pre-tax, RMDs at 73
+roth_ira            = 43000      # Roth IRA                    — Tax-free, no RMDs
+roth_401k           = 0          # Roth 401(k)                 — Tax-free, no RMDs
+hsa                 = 9000       # HSA                         — Triple tax-free for medical
+taxable_brokerage   = 10000      # Taxable brokerage account
+cash_savings        = 5000       # Cash, savings accounts, CDs
+home_equity         = 320000     # Home equity (shown in net worth only, not withdrawn)
+
+# ---- DEBTS ----
+mortgage_balance    = 10000
+other_debt          = 0
+
+
+[spouse_accounts]
+# Only used when has_spouse = true
+trad_401k           = 0
+trad_ira            = 0
+roth_ira            = 5000
+roth_401k           = 0
+hsa                 = 0
+
+
+[contributions]
+# ================================================================
+# Pre-Retirement Contribution Strategy
+# These contributions will be modeled from TODAY until retirement age.
+# Use a dollar amount OR "max" to contribute the IRS annual maximum.
+# ================================================================
+
+# Your 401(k) / 403(b) annual contribution
+# "max" = $23,500 base + catch-up as applicable (age 50-59: +$7,500; age 60-63: +$11,250)
+contrib_401k                = max
+
+# Your Roth IRA / Backdoor Roth annual contribution
+# "max" = $7,000 base + $1,000 catch-up age 50+
+# Set to 0 if you do NOT plan to do Backdoor Roth (high earners can't do direct Roth)
+contrib_roth                = max
+
+# Additional annual savings to taxable brokerage (after maxing tax-advantaged)
+contrib_taxable             = 0
+
+# Spouse contributions (only used when has_spouse = true)
+spouse_contrib_401k         = 0        # "max" or dollar amount
+spouse_contrib_roth         = max      # "max" or dollar amount
+
+
+[goals]
+# Annual household spending in TODAY'S dollars (inflation applied automatically)
+annual_spending     = 750000
+
+# Optional "slow-go" phase: reduce spending after a certain age
+spending_reduce_age =            # e.g. 80  (leave blank to disable)
+reduced_spending    =            # e.g. 65000
+
+# How long must the portfolio last?
+# Options: 30 | 35 | 40 | perpetual | (any number of years)
+goal_type           = perpetual
+
+
+[assumptions]
+# Asset Allocation
+stock_allocation_pct        = 80     # % in stocks; remainder in bonds
+
+# Expected NOMINAL (before inflation) annual returns
+stock_return_pct            = 7.0    # Conservative: 7%, Historical avg: 10%
+bond_return_pct             = 4.0
+
+# Inflation assumption
+inflation_rate_pct          = 3.0
+
+# Tax filing status — affects bracket thresholds and standard deduction
+filing_status               = MFJ    # MFJ (Married Filing Jointly) or Single
+
+# Model Roth conversion during low-income years before SS/RMDs kick in?
+roth_conversion_strategy    = true   # true or false
+
+
+# ================================================================
+[non-qualified deferred compensation plan]
+# ================================================================
+has_dqnc                 = false  # true if you participate in non-qualified deferred compensation plan
+
+# Current accumulated non-qualified deferred compensation plan balance
+dqnc_balance             = 0
+
+# How much you currently defer per year (salary + bonus combined)
+dqnc_annual_deferral     = 0
+
+# Your current annual gross salary (used to estimate the 5% Intel match)
+current_salary              = 150000
+
+# Distribution payout schedule elected for future deferrals
+# Options: lump | 5yr | 10yr
+dqnc_dist_type           = 10yr
+
+# Age at which SERPLUS distributions begin (typically = retirement age)
+dqnc_dist_start_age      = 65
