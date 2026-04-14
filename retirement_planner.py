@@ -21,7 +21,7 @@ import sys
 import webbrowser
 from datetime import datetime, date
 from pathlib import Path
-from urllib.request import urlopen, urlretrieve
+# No network calls during generation: prefer local bundled assets
 
 CHARTJS_URL   = "https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"
 CHARTJS_CACHE = "chart.min.js"  # saved alongside this script
@@ -260,16 +260,9 @@ def get_chartjs(script_dir: Path) -> str | None:
     if cache.exists():
         print(f"  📦 Chart.js loaded from cache ({cache.name})")
         return cache.read_text(encoding='utf-8')
-    try:
-        print("  📥 Downloading Chart.js for offline use (one-time)...")
-        urlretrieve(CHARTJS_URL, cache)
-        content = cache.read_text(encoding='utf-8')
-        print(f"  ✅ Saved to {cache.name} ({len(content)//1024} KB)")
-        return content
-    except Exception as exc:
-        print(f"  ⚠️  Could not download Chart.js: {exc}")
-        print("     The report will use CDN — internet required to view charts.")
-        return None
+    # Do not attempt to download automatically to preserve fully-offline generation.
+    print("  ⚠️  Chart.js cache not found (chart.min.js). Using CDN fallback in generated HTML.")
+    return None
 
 
 # ─────────────────────────────────────────────────────────────
@@ -407,6 +400,7 @@ tr.hl td{background:#f0fdfa;}
   <button class="tab-btn" onclick="sw('accounts')">③ Accounts</button>
   <button class="tab-btn" onclick="sw('goals')">④ Goals</button>
   <button class="tab-btn" onclick="sw('results')">⑤ Results</button>
+  <button class="tab-btn" onclick="sw('taxbrackets')">⑥ Tax Brackets</button>
 </div>
 
 <div class="content">
@@ -760,9 +754,49 @@ tr.hl td{background:#f0fdfa;}
     </div>
     <div class="card"><h2>📈 Portfolio Balance Over Time</h2><div class="ch"><canvas id="portChart"></canvas></div></div>
     <div class="card"><h2>💵 Annual Income Sources</h2><div class="ch"><canvas id="incChart"></canvas></div></div>
+
+    <div class="card">
+      <h2>🎲 Monte Carlo Risk Engine</h2>
+      <details style="margin-bottom:1rem;">
+        <summary style="cursor:pointer;font-weight:600;color:var(--p);font-size:.9rem;">ℹ️ How to read this analysis</summary>
+        <div style="margin-top:.7rem;padding:.9rem;background:#f8fafc;border-radius:8px;border:1px solid var(--bd);font-size:.85rem;line-height:1.65;">
+          <p style="margin:0 0 .6rem;"><strong>What is Monte Carlo analysis?</strong> Your deterministic plan uses a single average return each year. In reality, markets are volatile — some years gain 25%, others lose 20%. Monte Carlo runs <em>1,000+ simulations</em>, each with randomly varied annual returns drawn from a normal distribution centered on your target return. This stress-tests your plan against sequence-of-returns risk (bad years early in retirement are most damaging).</p>
+          <p style="margin:0 0 .6rem;"><strong>The Survival Curve (main chart):</strong> The X-axis is your age; the Y-axis is the percentage of simulations where your portfolio still has money at that age. For example, if the curve shows <strong>82% at age 85</strong>, it means 820 out of 1,000 scenarios still had a positive balance at that age.</p>
+          <div style="display:flex;gap:.6rem;flex-wrap:wrap;margin:.7rem 0;">
+            <span style="background:#dcfce7;border:1px solid #86efac;border-radius:6px;padding:.3rem .7rem;font-size:.8rem;font-weight:600;color:#166534;">🟢 &gt;80% — Safe Zone</span>
+            <span style="background:#fef9c3;border:1px solid #fde047;border-radius:6px;padding:.3rem .7rem;font-size:.8rem;font-weight:600;color:#854d0e;">🟡 50–80% — Caution Zone</span>
+            <span style="background:#fee2e2;border:1px solid #fca5a5;border-radius:6px;padding:.3rem .7rem;font-size:.8rem;font-weight:600;color:#991b1b;">🔴 &lt;50% — At Risk Zone</span>
+          </div>
+          <p style="margin:0 0 .6rem;"><strong>Ending Wealth Percentiles:</strong> After all simulations complete, the 10th/50th/90th percentile values show the range of portfolio outcomes at your life expectancy. The 10th percentile represents a "bad luck" scenario; the 90th represents favorable returns throughout retirement.</p>
+          <p style="margin:0;"><strong>Volatility input:</strong> Annual standard deviation (σ). A diversified 80/20 stock-bond portfolio typically has σ ≈ 10–14%. Higher σ = wider range of outcomes but same average — it spreads the survival curve rather than shifting it.</p>
+        </div>
+      </details>
+      <div class="fg">
+        <div class="fm"><label>Iterations</label><input type="number" id="mcIterations" min="100" value="1000"></div>
+        <div class="fm"><label>Annual Volatility % (σ)</label><input type="number" id="mcVol" step="0.1" min="0" value="12"></div>
+      </div>
+      <div style="margin-top:.7rem;" class="nav-btns"><button class="nb pri" onclick="runMonteCarlo()">▶ Run Monte Carlo</button></div>
+      <div id="mcSummary" class="ssp" style="margin-top:.7rem;"></div>
+      <div style="position:relative;">
+        <div class="ch" style="height:300px;margin-top:.75rem;"><canvas id="mcChart"></canvas></div>
+        <div style="display:flex;gap:.5rem;justify-content:center;flex-wrap:wrap;margin-top:.5rem;font-size:.76rem;">
+          <span style="display:flex;align-items:center;gap:.3rem;"><span style="width:14px;height:4px;background:#ff6b6b;display:inline-block;border-radius:2px;"></span>Survival probability (% of simulations solvent)</span>
+          <span style="display:flex;align-items:center;gap:.3rem;"><span style="width:12px;height:12px;background:#dcfce7;border:1px solid #86efac;display:inline-block;border-radius:2px;"></span>&gt;80% safe</span>
+          <span style="display:flex;align-items:center;gap:.3rem;"><span style="width:12px;height:12px;background:#fef9c3;border:1px solid #fde047;display:inline-block;border-radius:2px;"></span>50–80% caution</span>
+          <span style="display:flex;align-items:center;gap:.3rem;"><span style="width:12px;height:12px;background:#fee2e2;border:1px solid #fca5a5;display:inline-block;border-radius:2px;"></span>&lt;50% at risk</span>
+        </div>
+      </div>
+    </div>
     <div class="card">
       <h2>📋 Year-by-Year Projection</h2>
-      <button class="cb-btn" onclick="toggleTbl()">Show / Hide Detail Table</button>
+      <div style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap;margin-bottom:.6rem;">
+        <button class="cb-btn" onclick="toggleTbl()">Show / Hide Detail Table</button>
+        <label style="display:flex;align-items:center;gap:.4rem;font-size:.83rem;cursor:pointer;">
+          <input type="checkbox" id="realDollarsToggle" onchange="rerenderTable()" style="width:16px;height:16px;">
+          Show in <strong>today's dollars</strong> (inflation-adjusted)
+        </label>
+        <span id="dollarsModeNote" style="font-size:.77rem;color:var(--tl);"></span>
+      </div>
       <div id="tbl-wrap" class="hidden">
         <div class="tw">
           <table><thead><tr>
@@ -772,8 +806,40 @@ tr.hl td{background:#f0fdfa;}
           </tr></thead><tbody id="tbl-body"></tbody></table>
         </div>
       </div>
+      <div id="tbl-dollar-note" style="font-size:.75rem;color:var(--tl);margin-top:.4rem;padding:.5rem .7rem;background:#fefce8;border:1px solid #fde047;border-radius:6px;display:none;"></div>
     </div>
     <div class="al info" style="font-size:.77rem;">⚠️ <strong>Disclaimer:</strong> Educational estimates only. Returns are not guaranteed. Consult a Certified Financial Planner (CFP) before making retirement decisions. Tax calculations are simplified.</div>
+  </div>
+</div>
+
+<div id="tab-taxbrackets" class="tab-panel">
+  <div class="card">
+    <h2>📐 Tax Brackets &amp; Inflation Projector</h2>
+    <p style="color:var(--tl);font-size:.88rem;margin-bottom:1rem;">View inflation-adjusted federal tax brackets for any future year. Change the CPI rate below and click <strong>Update Brackets</strong> — this also re-runs your full simulation with the new rate.</p>
+    <div class="fg" style="align-items:flex-end;gap:1.2rem;flex-wrap:wrap;">
+      <div class="fm">
+        <label>CPI Inflation Rate %</label>
+        <input type="number" id="tb-cpi" step="0.1" min="0" max="15" value="3.0" style="width:100px;">
+      </div>
+      <div class="fm">
+        <label>Project To Year</label>
+        <input type="number" id="tb-year" min="2026" max="2075" value="2035" style="width:110px;">
+      </div>
+      <div class="fm">
+        <label>Filing Status</label>
+        <select id="tb-filing" style="width:120px;">
+          <option value="MFJ">Married (MFJ)</option>
+          <option value="Single">Single</option>
+        </select>
+      </div>
+      <button class="nb pri" onclick="renderTaxBracketTab()">Update Brackets</button>
+    </div>
+    <div id="tb-output" style="margin-top:1.2rem;"></div>
+  </div>
+  <div class="card">
+    <h2>🏥 IRMAA Medicare Surcharge Tiers</h2>
+    <p style="color:var(--tl);font-size:.88rem;margin-bottom:.8rem;">Medicare Part B premiums increase for higher-income retirees based on MAGI from 2 years prior. Thresholds below are inflation-projected to the selected year.</p>
+    <div id="tb-irmaa-output"></div>
   </div>
 </div>
 
@@ -787,20 +853,22 @@ const RMD = {73:26.5,74:25.5,75:24.6,76:23.7,77:22.9,78:22.0,79:21.1,80:20.2,81:
 const FRA = 67;
 let pChart = null, iChart = null;
 
-// ── 2025 Federal Tax Brackets ────────────────────────────────
+// ── 2026 Federal Tax Brackets (IRS published) ────────────────
 const BRACKETS = {
-  MFJ:    [{r:.10,to:23200},{r:.12,to:94300},{r:.22,to:201050},{r:.24,to:383900},{r:.32,to:487450},{r:.35,to:731200},{r:.37,to:1e9}],
-  Single: [{r:.10,to:11600},{r:.12,to:47150},{r:.22,to:100525},{r:.24,to:191950},{r:.32,to:243725},{r:.35,to:609350},{r:.37,to:1e9}]
+  MFJ:    [{r:.10,to:24800},{r:.12,to:100800},{r:.22,to:211400},{r:.24,to:403550},{r:.32,to:512450},{r:.35,to:768700},{r:.37,to:1e9}],
+  Single: [{r:.10,to:12400},{r:.12,to:50400},{r:.22,to:105700},{r:.24,to:201775},{r:.32,to:256225},{r:.35,to:640600},{r:.37,to:1e9}]
 };
-const STD_DED  = {MFJ:30000, Single:15000};   // 2025
-const LTCG_0   = {MFJ:96700, Single:48350};   // 0% long-term cap gains up to these AGI levels
-const LTCG_15  = {MFJ:583750,Single:518900};  // 15% bracket above this = 20%
-// IRMAA Medicare Part B surcharge triggers (AGI, 2025)
-const IRMAA_TH = {MFJ:[212000,266000,334000,400000], Single:[106000,133000,167000,200000]};
+const STD_DED  = {MFJ:31500, Single:15750};   // 2026 est.
+const LTCG_0   = {MFJ:96950, Single:48475};   // 0% long-term cap gains up to these AGI levels
+const LTCG_15  = {MFJ:600050,Single:535000};  // 15% bracket above this = 20%
+// IRMAA Medicare Part B surcharge triggers (MAGI, 2026 est.)
+const IRMAA_TH = {MFJ:[218000,274000,345000,426000], Single:[109000,137000,173000,213000]};
+// IRMAA annual Medicare Part B surcharges by tier (2026 est., per person per month × 12)
+const IRMAA_SURCHARGE = [0, 816, 2040, 3264, 4488]; // tier 0–4 annual amounts (single person)
 
-// CPI / indexing settings (user chose baseline 2026 and CPI 3.0%)
+// CPI / indexing settings (baseline 2026 and CPI 3.0%)
 const CPI_BASE_YEAR = 2026;
-const CPI_RATE = 0.03; // 3.0% per year
+let CPI_RATE = 0.03; // 3.0% per year — user-adjustable via Tax Brackets tab
 const HCARE_RATE = 0.04; // healthcare inflation used for HSA adjustments
 
 // Approximate California state brackets (baseline thresholds — simple progressive model)
@@ -840,13 +908,32 @@ function computeStateTaxCA(agi, filing, multiplier=1){
   return Math.max(0, Math.round(tax));
 }
 
-/** Evaluate conversion options for common target brackets (12% and 22%).
- * Returns {amount, choice} where choice is '12%' or '22%'. */
+/**
+ * Compute the federally taxable portion of Social Security income.
+ * Implements IRS Section 86 tiered provisional income formula.
+ * @param {number} ssInc   - Total SS income received this year
+ * @param {number} otherIncome - All other AGI items (wages, pension, trad withdrawals, etc.)
+ * @param {string} filing  - 'MFJ' or 'Single'
+ */
+function taxableSSAmt(ssInc, otherIncome, filing) {
+  if (ssInc <= 0) return 0;
+  const pi = otherIncome + ssInc * 0.5;   // provisional income
+  const [low, high] = (filing === 'MFJ') ? [32000, 44000] : [25000, 34000];
+  if (pi <= low)  return 0;
+  if (pi <= high) return Math.min(ssInc * 0.50, (pi - low) * 0.50);
+  // Above upper threshold: tier1 (lower band) + 85% on excess
+  const tier1 = Math.min(ssInc * 0.50, (high - low) * 0.50);
+  const tier2 = (pi - high) * 0.85;
+  return Math.min(ssInc * 0.85, tier1 + tier2);
+}
+
+/** Evaluate conversion options for common target brackets (12%, 22%, and 24%).
+ * Returns {amount, choice} where choice is '12%', '22%', or '24%'. */
 function evalConversionOptions(provAGI, tradBal, filing, multiplier=1){
   const currentFed = computeTaxVars(provAGI, filing, multiplier).tax;
   const currentState = computeStateTaxCA(Math.max(0, provAGI), filing, multiplier);
   const currentTotal = currentFed + currentState;
-  const targets = [0.12, 0.22];
+  const targets = [0.12, 0.22, 0.24];
   let best = {amount:0, choice:null, incTax:Infinity, options:[]};
   const std = Math.round((STD_DED[filing]||STD_DED.MFJ) * multiplier);
   const bs = (BRACKETS[filing]||BRACKETS.MFJ).map(b=>({r:b.r,to:Math.round(b.to*multiplier)}));
@@ -1135,6 +1222,7 @@ function project(inp){
   // ── PHASE 1: ACCUMULATION ──────────────────────────────────
   // Run from current age up to (but not including) retirement age
   let tb = trad0||0, rb = roth0||0, xb = taxable0||0, cb = cash0||0, hb = hsa0||0;
+  let xbBasis = xb; // cost basis tracking for taxable brokerage (initial balance = basis)
   let nqdcBal = nqdcBalance||0;
   const accumRows = [];
   const yearsToRetire = Math.max(0, retAge1 - age1);
@@ -1151,9 +1239,10 @@ function project(inp){
     // NQDC accumulation (deferral grows the balance)
     const defAmt = parseFloat(nqdcDeferral)||0;
     if(hasNqdc && defAmt>0) nqdcBal += defAmt;
-    // Add contributions then grow
+    // Add contributions then grow (taxable contributions add to cost basis)
     tb = (tb + c401 + sc401) * (1 + pr);
     rb = (rb + cIRA + scIRA) * (1 + pr);
+    xbBasis += cTax; // contributions are basis; growth is not
     xb = (xb + cTax) * (1 + pr);
     hb = hb * (1 + pr * 0.8);
     cb = cb * (1 + Math.min(inf*0.9, 0.04));
@@ -1176,6 +1265,7 @@ function project(inp){
 
   // ── PHASE 2: DISTRIBUTION ─────────────────────────────────
   tb=retTrad; rb=retRoth; xb=retTaxable; cb=retCash; hb=retHSA;
+  // xbBasis carries over from accumulation phase (cost basis of taxable brokerage)
   nqdcBal=retNqdcBal;
   const magiHistory = [];
   const nqdcYrs    = nqdcYears(nqdcDistType);
@@ -1216,10 +1306,18 @@ function project(inp){
     let fTrad = Math.min(tb, rmd), fTax = 0, fRoth = 0, fCash = 0, fHSA = 0;
     let need = Math.max(0, portNeed - fTrad);
     // 1) Taxable brokerage first
+    // Compute taxable gain fraction: only the gain portion (above cost basis) is taxable at LTCG rates
+    const xbGainFrac = (xb > 0 && xb > xbBasis) ? Math.max(0, (xb - xbBasis) / xb) : 0;
     if(need > 0){ fTax = Math.min(xb, need); need -= fTax; }
+    // Update cost basis proportionally after taxable withdrawal
+    if(fTax > 0 && xb > 0){
+      const basisWithdrawn = fTax * (xbBasis / xb);  // basis portion of withdrawal
+      xbBasis = Math.max(0, xbBasis - basisWithdrawn);
+    }
     // 2) Traditional — but only up to current bracket room to avoid pushing into higher bracket
     if(need > 0){
-      const provAGI_beforeTrad = ssInc*0.85 + nqdcInc + penInc + othInc + rmd + (fTax*0.15);
+      const _otherPT = nqdcInc + penInc + othInc + rmd + (fTax * xbGainFrac);
+      const provAGI_beforeTrad = taxableSSAmt(ssInc, _otherPT, filingStatus||'MFJ') + _otherPT;
       const prov = computeTaxVars(provAGI_beforeTrad, filingStatus||'MFJ', mult);
       const room = prov.room;
       const availTrad = Math.max(0, tb - fTrad);
@@ -1236,7 +1334,8 @@ function project(inp){
     let rothConv=0;
     if(rothConversion && tb>0 && fRoth===0){
       // Evaluate multiple bracket fill options and choose the least incremental tax cost
-      const provAGI = ssInc*0.85 + nqdcInc + penInc + othInc + rmd;
+      const _otherPC = nqdcInc + penInc + othInc + rmd + (fTax * xbGainFrac);
+      const provAGI = taxableSSAmt(ssInc, _otherPC, filingStatus||'MFJ') + _otherPC;
       const evals = evalConversionOptions(provAGI, tb, filingStatus||'MFJ', mult);
       if(evals && evals.amount>0){
         rothConv = evals.amount;
@@ -1248,31 +1347,49 @@ function project(inp){
         var chosenConvLabel = null;
       }
     }
-    // Growth
+    // Growth — basis stays the same (growth is unrealized gain, not basis)
     tb = Math.max(0,tb-fTrad)*(1+pr);
     rb = Math.max(0,rb-fRoth)*(1+pr);
     xb = Math.max(0,xb-fTax)*(1+pr);
+    // xbBasis unchanged by growth (investment returns increase the unrealized gain, not basis)
     hb = Math.max(0,hb-fHSA)*(1+pr*0.8);
     cb = Math.max(0,cb-fCash)*(1+Math.min(inf*0.9,0.04));
     const tot = tb+rb+xb+cb+hb;
-    // Final AGI (Pass 2) — include taxable portion of brokerage (assumed 15% of withdrawal) and Roth conversions
-    const agi = ssInc*0.85 + nqdcInc + penInc + othInc + fTrad + (fTax*0.15) + rothConv;
+    // Final AGI (Pass 2) — taxable brokerage: only the gain portion (xbGainFrac) is taxable at LTCG rates
+    const _otherAGI = nqdcInc + penInc + othInc + fTrad + (fTax * xbGainFrac) + rothConv;
+    const _tssAmt   = taxableSSAmt(ssInc, _otherAGI, filingStatus||'MFJ');
+    const agi = _tssAmt + _otherAGI;
     // Federal tax computed using CPI-indexed brackets
     const fed = computeTaxVars(agi, filingStatus||'MFJ', mult);
     // IRMAA uses MAGI from Year-2 (if available), otherwise fallback to current AGI
     const magiForIrmaa = (magiHistory.length >= 2) ? magiHistory[magiHistory.length-2] : agi;
     const irmaaAdj = (()=>{ const th=(IRMAA_TH[filingStatus]||IRMAA_TH.MFJ); for(let i=th.length-1;i>=0;i--){ if(magiForIrmaa>Math.round(th[i]*mult)) return i+1; } return 0; })();
-    // State tax (CA) — remove Social Security from state MAGI
-    const stateTaxableAGI = agi - ssInc*0.85;
+    // State tax (CA) — CA does not tax Social Security, so remove SS from state AGI
+    const stateTaxableAGI = agi - _tssAmt;
     const stateTax = computeStateTaxCA(stateTaxableAGI, filingStatus||'MFJ', mult);
     const ltcgRate = agi<(LTCG_0[filingStatus||'MFJ']||96700)?0:agi<(LTCG_15[filingStatus||'MFJ']||583750)?0.15:0.20;
+    // --- Validation checks (NaN, negatives, tax integrity) ---
+    const warnings = [];
+    const checkNums = {agi, federalTax:fed.tax, stateTax, tot, tb, rb, xb, cb, hb, fTrad, fTax, fRoth, fCash, fHSA, rmd, rothConv};
+    for(const k in checkNums){ const v = checkNums[k]; if(!Number.isFinite(v) || isNaN(v)){ warnings.push(`${k} invalid: ${v}`); } }
+    if(tb < -0.5) warnings.push(`Traditional balance negative: ${Math.round(tb)}`);
+    if(rb < -0.5) warnings.push(`Roth balance negative: ${Math.round(rb)}`);
+    if(xb < -0.5) warnings.push(`Taxable balance negative: ${Math.round(xb)}`);
+    if(cb < -0.5) warnings.push(`Cash balance negative: ${Math.round(cb)}`);
+    if(hb < -0.5) warnings.push(`HSA balance negative: ${Math.round(hb)}`);
+    if(fed.tax < 0) warnings.push(`Federal tax negative: ${fed.tax}`);
+    if(stateTax < 0) warnings.push(`State tax negative: ${stateTax}`);
+    // (redundant federal recompute removed)
+    if(warnings.length>0) console.warn('Year', year, 'warnings:', warnings);
+
     retireRows.push({year:year, age1:a1, age2,
       ssInc, penInc, othInc, nqdcInc, extInc, spending,
       portNeed, fTrad, fTax, fRoth, fCash, fHSA, rothConv,
       actual:fTrad+fTax+fRoth+fCash+fHSA,
       rmd, tb, rb, xb, cb, hb, tot,
       agi, margRate:fed.margRate, room:fed.room, irmaa:irmaaAdj, ltcgRate,
-      federalTax:fed.tax, stateTax, provAGI: (ssInc*0.85 + nqdcInc + penInc + othInc + rmd), convChoice: chosenConvLabel||null
+      federalTax:fed.tax, stateTax, provAGI: (()=>{ const _o=nqdcInc+penInc+othInc+rmd; return taxableSSAmt(ssInc,_o,filingStatus||'MFJ')+_o; })(), convChoice: chosenConvLabel||null,
+      warnings
     });
     // record MAGI history for IRMAA lookback
     magiHistory.push(agi);
@@ -1327,6 +1444,9 @@ function calculate(){
     nqdcStartAge:int('nqdcStartAge')||65,
   };
   const proj=project(inp);
+  // expose last projection + inputs for Monte Carlo analysis
+  window._lastProj = proj;
+  window._lastInp = inp;
   renderResults(proj,inp);
   sw('results');
 }
@@ -1648,8 +1768,157 @@ function renderIncChart(proj,inp){
       y:{stacked:true,ticks:{callback:v=>fmtK(v),font:{size:10}},grid:{color:'#f1f5f9'}}}}});
 }
 
+// ═══════════════════════════════════════════════════
+//  MONTE CARLO
+// ═══════════════════════════════════════════════════
+let mcChart = null;
+function randNormal(mean=0, sd=1){
+  // Box-Muller
+  let u=0,v=0; while(u===0) u=Math.random(); while(v===0) v=Math.random();
+  const z=Math.sqrt(-2.0*Math.log(u))*Math.cos(2*Math.PI*v);
+  return z*sd + mean;
+}
+
+function runMonteCarlo(){
+  const last = window._lastProj; const inp = window._lastInp;
+  if(!last || !inp){ alert('Run Calculate first to produce a deterministic plan.'); return; }
+  const iterations = parseInt($('mcIterations').value)||1000;
+  const volPct = parseFloat($('mcVol').value)||12;
+  const retireRows = last.retireRows;
+  const startBal = last.retireStartBal || 0;
+  if(!retireRows || retireRows.length===0){ alert('No retirement projection available for Monte Carlo.'); return; }
+
+  // mean return per year (nominal) used in deterministic projection
+  const mean = ( (inp.stockAlloc/100)*(inp.stockReturn/100) + ((100-inp.stockAlloc)/100)*(inp.bondReturn/100) );
+  const sd = volPct/100;
+  const years = retireRows.length;
+
+  const survivalCounts = new Array(years).fill(0);
+  const ending = [];
+
+  for(let it=0; it<iterations; it++){
+    let bal = startBal;
+    let survived = true;
+    for(let y=0;y<years;y++){
+      const r = randNormal(mean, sd);
+      bal = bal * (1 + r);
+      const draw = Math.max(0, retireRows[y].actual || 0);
+      bal -= draw;
+      if(bal>0) survivalCounts[y]++;
+      if(bal<=0){ survived = false; // portfolio depleted this year
+        // mark remaining years as zero survival (counts not incremented)
+        break;
+      }
+    }
+    ending.push(Math.max(0, bal));
+  }
+
+  // Compute survival percent over time and percentiles of ending wealth
+  const survivalPct = survivalCounts.map(c=> (c/iterations)*100 );
+  ending.sort((a,b)=>a-b);
+  const pct = (p)=> ending[Math.floor((p/100)*(ending.length-1))] || 0;
+  const p10 = pct(10), p50 = pct(50), p90 = pct(90);
+
+  // ages must be defined before summary text references it
+  const ages = retireRows.map(r=>r.age1);
+
+  // Summary
+  const survProb = survivalPct[survivalPct.length-1]||0;
+  const zoneColor = survProb>=80?'#166534':survProb>=50?'#854d0e':'#991b1b';
+  const zoneBg    = survProb>=80?'#dcfce7':survProb>=50?'#fef9c3':'#fee2e2';
+  const zoneTxt   = survProb>=80?'Safe Zone ✅':survProb>=50?'Caution Zone ⚠️':'At Risk Zone 🔴';
+  $('mcSummary').innerHTML = `
+    <div style="background:${zoneBg};border:1.5px solid;border-color:${zoneColor}40;border-radius:10px;padding:.8rem 1rem;margin-bottom:.7rem;">
+      <div style="font-size:.8rem;color:${zoneColor};font-weight:600;">${zoneTxt}</div>
+      <div style="font-size:1.5rem;font-weight:800;color:${zoneColor};">${survProb.toFixed(1)}% survival probability</div>
+      <div style="font-size:.78rem;color:var(--tl);margin-top:.2rem;">${Math.round(survProb/100*iterations)} of ${iterations} simulations still solvent at the end of your projection (age ${ages[ages.length-1]||'?'})</div>
+    </div>
+    <div style="margin-top:.5rem;display:grid;grid-template-columns:repeat(3,1fr);gap:.5rem;">
+      <div style="background:#fff;border-radius:8px;padding:.6rem;border:1px solid var(--bd);text-align:center;">
+        <div style="font-size:.72rem;color:var(--tl);">10th percentile ending wealth</div>
+        <div style="font-size:1.1rem;font-weight:700;color:#ef4444;">${fmtK(p10)}</div>
+        <div style="font-size:.68rem;color:var(--tl);">Bad luck scenario</div>
+      </div>
+      <div style="background:#fff;border-radius:8px;padding:.6rem;border:1px solid var(--bd);text-align:center;">
+        <div style="font-size:.72rem;color:var(--tl);">Median ending wealth</div>
+        <div style="font-size:1.1rem;font-weight:700;color:#4f46e5;">${fmtK(p50)}</div>
+        <div style="font-size:.68rem;color:var(--tl);">50th percentile</div>
+      </div>
+      <div style="background:#fff;border-radius:8px;padding:.6rem;border:1px solid var(--bd);text-align:center;">
+        <div style="font-size:.72rem;color:var(--tl);">90th percentile ending wealth</div>
+        <div style="font-size:1.1rem;font-weight:700;color:#166534;">${fmtK(p90)}</div>
+        <div style="font-size:.68rem;color:var(--tl);">Favorable scenario</div>
+      </div>
+    </div>`;
+
+  // Render survival over age chart with color-zone background bands
+  if(mcChart) mcChart.destroy();
+  const ctx = $('mcChart')?.getContext('2d');
+  if(ctx){
+    const zoneBgPlugin = {
+      id:'zoneBg',
+      beforeDraw(chart){
+        const {ctx:c,chartArea:{top,bottom,left,right},scales:{y}} = chart;
+        if(!y) return;
+        const toY = p => y.getPixelForValue(p);
+        c.save();
+        c.fillStyle='rgba(220,252,231,0.45)'; c.fillRect(left,toY(100),right-left,toY(80)-toY(100));
+        c.fillStyle='rgba(254,249,195,0.55)'; c.fillRect(left,toY(80),right-left,toY(50)-toY(80));
+        c.fillStyle='rgba(254,226,226,0.45)'; c.fillRect(left,toY(50),right-left,toY(0)-toY(50));
+        c.restore();
+      }
+    };
+    mcChart = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: ages,
+        datasets: [{ label: 'Survival %', data: survivalPct, borderColor: '#ff6b6b', backgroundColor:'rgba(255,107,107,0.12)', fill:true, tension:.25, pointRadius:0, borderWidth:2 }]
+      },
+      options:{
+        responsive:true, maintainAspectRatio:false,
+        scales:{
+          y:{min:0,max:100,ticks:{callback:v=>v+'%'},grid:{color:'rgba(0,0,0,.05)'}},
+          x:{grid:{display:false}}
+        },
+        plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>`${c.parsed.y.toFixed(1)}% of simulations solvent`}}}
+      },
+      plugins:[zoneBgPlugin]
+    });
+  }
+}
+
+function rerenderTable(){
+  const last = window._lastProj;
+  if(!last || !window._lastInp) return;
+  renderTable(last.accumRows||[], last.retireRows||[], window._lastInp);
+}
+
 function renderTable(accumRows, retireRows, inp){
   const tbody=$('tbl-body'); tbody.innerHTML='';
+  // Real-dollars toggle: deflate nominal values back to today's purchasing power
+  const useReal = $('realDollarsToggle')?.checked || false;
+  const startYr  = new Date().getFullYear();
+  const inf      = (inp.inflationRate||3)/100;
+  // Helper: deflate a nominal value in simulation year `simYear` back to today's dollars
+  const deflate  = (v, simYear) => useReal ? v / Math.pow(1+inf, simYear - startYr) : v;
+  const fmtD     = (v, yr) => fmt(deflate(v, yr));
+  const fmtKD    = (v, yr) => fmtK(deflate(v, yr));
+
+  // Update note banner
+  const noteEl = $('tbl-dollar-note');
+  if(noteEl){
+    if(useReal){
+      noteEl.style.display='block';
+      // Find first retirement year SS to show the conversion
+      const yr0 = retireRows.find(r=>r.ssInc>0);
+      const ssNote = yr0 ? ` For example, SS income of ${fmtK(yr0.ssInc)} nominal in year ${yr0.year} equals ${fmtK(deflate(yr0.ssInc, yr0.year))} in today's dollars — matching your ssa.gov estimate.` : '';
+      noteEl.innerHTML = `📅 <strong>Showing in today's dollars</strong> (all nominal amounts divided by cumulative inflation). This matches what ssa.gov shows for your SS benefit.${ssNote}`;
+    } else {
+      noteEl.style.display='block';
+      noteEl.innerHTML = `💡 <strong>Showing nominal (future) dollars.</strong> All amounts reflect actual dollar amounts in that future year after inflation. ssa.gov shows SS benefits in <em>today's dollars</em> — toggle above to see comparable values. Your SS check in nominal dollars will be larger than ssa.gov shows because of annual COLA increases.`;
+    }
+  }
+
   // Update table header to have "Phase" column
   const thead=document.querySelector('#tbl-wrap thead tr');
   if(thead && accumRows.length>0 && !thead.querySelector('.ph-col')){
@@ -1690,15 +1959,15 @@ function renderTable(accumRows, retireRows, inp){
     const bracketColor=r.margRate<=0.12?'#166534':r.margRate<=0.22?'#92400e':'#991b1b';
     const irmaaCell=r.irmaa>0?`<span style="color:#991b1b;font-weight:600;">Tier ${r.irmaa}</span>`:'—';
     const phaseCell=accumRows.length>0?`<td style="color:#6b7280;font-size:.75rem;">RETIRE</td>`:'';
-    const rothConvCell=r.rothConv>0?`<span style="color:#7c3aed;font-size:.72rem;">+${fmtK(r.rothConv)} conv</span>`:'';
+    const rothConvCell=r.rothConv>0?`<span style="color:#7c3aed;font-size:.72rem;">+${fmtKD(r.rothConv,r.year)} conv</span>`:'';
     const convChoiceCell=r.convChoice?` <div style="font-size:.72rem;color:#7c3aed;">(${r.convChoice})</div>`:'';
-    tr.innerHTML=`${phaseCell}<td>${r.year}</td><td>${age}</td><td>${fmt(r.ssInc)}</td>
-      <td>${r.nqdcInc>0?`<strong style="color:#4f46e5;">${fmt(r.nqdcInc)}</strong>`:'—'}</td>
-      <td>${fmt(r.penInc+r.othInc)}</td><td>${fmt(r.actual)}</td><td>${fmt(r.fTrad)}${rothConvCell}</td>
-      <td>${fmt(r.fRoth)}${convChoiceCell}</td><td>${r.rmd>0?fmt(r.rmd):'—'}</td>
+    tr.innerHTML=`${phaseCell}<td>${r.year}</td><td>${age}</td><td>${fmtD(r.ssInc,r.year)}</td>
+      <td>${r.nqdcInc>0?`<strong style="color:#4f46e5;">${fmtD(r.nqdcInc,r.year)}</strong>`:'—'}</td>
+      <td>${fmtD(r.penInc+r.othInc,r.year)}</td><td>${fmtD(r.actual,r.year)}</td><td>${fmtD(r.fTrad,r.year)}${rothConvCell}</td>
+      <td>${fmtD(r.fRoth,r.year)}${convChoiceCell}</td><td>${r.rmd>0?fmtD(r.rmd,r.year):'—'}</td>
       <td><strong style="color:${bracketColor};">${(r.margRate*100).toFixed(0)}%</strong></td>
       <td>${irmaaCell}</td>
-      <td><strong>${fmtK(r.tot)}</strong></td>`;
+      <td><strong>${fmtKD(r.tot,r.year)}</strong></td>`;
     tbody.appendChild(tr);
   });
 }
@@ -1792,7 +2061,147 @@ window.onload = function(){
    'goalType','customGoalYears','annualSpending'].forEach(id=>{
     const el=$(id); if(el) el.addEventListener('input',updateSWR);
   });
+  // Initialize tax bracket tab with default values
+  renderTaxBracketTab();
 };
+
+// ═══════════════════════════════════════════════════
+//  TAX BRACKETS TAB
+// ═══════════════════════════════════════════════════
+function renderTaxBracketTab(){
+  // Read user inputs from the tab controls
+  const userCpi  = parseFloat($('tb-cpi')?.value) || 3.0;
+  const targetYr = parseInt($('tb-year')?.value)  || 2035;
+  const filing   = $('tb-filing')?.value           || 'MFJ';
+
+  // Update global CPI_RATE so re-running simulation picks up new rate
+  CPI_RATE = userCpi / 100;
+  // Also sync the inflationRate input if present
+  if($('inflationRate')) $('inflationRate').value = userCpi;
+
+  const yearsOut = Math.max(0, targetYr - CPI_BASE_YEAR);
+  const mult     = Math.pow(1 + CPI_RATE, yearsOut);
+
+  const baseBrackets = (BRACKETS[filing]||BRACKETS.MFJ);  // 2026 baseline
+  const adjBrackets  = baseBrackets.map(b=>({r:b.r, to: b.r===0.37 ? null : Math.round(b.to*mult)}));
+  const baseStd      = STD_DED[filing]||STD_DED.MFJ;      // 2026 baseline std ded
+  const adjStd       = Math.round(baseStd * mult);
+
+  // Build combined baseline + projected bracket table
+  const pct = v => (v*100).toFixed(0)+'%';
+  const isProjected = yearsOut > 0;
+  let rows = '';
+  let basePrev = 0, adjPrev = 0;
+  for(let i=0;i<adjBrackets.length;i++){
+    const b    = adjBrackets[i];
+    const bb   = baseBrackets[i];
+    const baseHi = bb.r===0.37 ? null : bb.to;
+    const adjHi  = b.to;
+    const color = b.r<=0.12?'#166534':b.r<=0.22?'#1e40af':b.r<=0.24?'#92400e':b.r<=0.32?'#7c2d12':'#831843';
+    const bg    = b.r<=0.12?'#dcfce7':b.r<=0.22?'#dbeafe':b.r<=0.24?'#fef3c7':b.r<=0.32?'#fee2e2':'#fdf4ff';
+    const baseHiStr = baseHi ? fmt(baseHi) : '∞';
+    const adjHiStr  = adjHi  ? fmt(adjHi)  : '∞';
+    const changed = isProjected && adjHi !== baseHi;
+    rows += `<tr style="background:${bg};">
+      <td style="font-weight:700;color:${color};font-size:1rem;">${pct(b.r)}</td>
+      <td style="color:var(--tl);">${basePrev===0?'$0':fmt(basePrev)}</td>
+      <td>${baseHiStr}</td>
+      ${isProjected ? `
+      <td style="color:var(--tl);border-left:2px solid #e2e8f0;">${adjPrev===0?'$0':fmt(adjPrev)}</td>
+      <td style="font-weight:${changed?'700':'400'};color:${changed?color:'inherit'};">${adjHiStr}${changed?` <span style="font-size:.7rem;color:#059669;">▲</span>`:''}</td>` : ''}
+    </tr>`;
+    if(baseHi) basePrev = baseHi;
+    if(adjHi)  adjPrev  = adjHi;
+  }
+
+  const out = $('tb-output');
+  if(!out) return;
+  out.innerHTML = `
+    <div style="display:flex;gap:1rem;margin-bottom:.8rem;flex-wrap:wrap;">
+      <div style="background:#f8fafc;border:1px solid #cbd5e1;border-radius:8px;padding:.6rem 1rem;flex:1;min-width:160px;">
+        <div style="font-size:.75rem;color:var(--tl);">Standard Deduction — ${CPI_BASE_YEAR} Baseline (${filing})</div>
+        <div style="font-size:1.3rem;font-weight:700;color:var(--tx);">${fmt(baseStd)}</div>
+        <div style="font-size:.72rem;color:var(--tl);">Current baseline year</div>
+      </div>
+      ${isProjected ? `
+      <div style="background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:.6rem 1rem;flex:1;min-width:160px;">
+        <div style="font-size:.75rem;color:#166534;">Standard Deduction — ${targetYr} Projected (${filing})</div>
+        <div style="font-size:1.3rem;font-weight:700;color:#15803d;">${fmt(adjStd)}</div>
+        <div style="font-size:.72rem;color:#4ade80;">+${fmt(adjStd-baseStd)} vs. baseline (${userCpi}% CPI × ${yearsOut} yrs)</div>
+      </div>` : ''}
+      <div style="background:#eff6ff;border:1px solid #93c5fd;border-radius:8px;padding:.6rem 1rem;flex:1;min-width:160px;">
+        <div style="font-size:.75rem;color:#1e40af;">CPI Multiplier (${CPI_BASE_YEAR}→${targetYr})</div>
+        <div style="font-size:1.3rem;font-weight:700;color:#1d4ed8;">×${mult.toFixed(3)}</div>
+        <div style="font-size:.72rem;color:#60a5fa;">${yearsOut} year${yearsOut!==1?'s':''} of ${userCpi}% compounding</div>
+      </div>
+    </div>
+    <div class="tw">
+    <table>
+      <thead>
+        <tr>
+          <th rowspan="2">Rate</th>
+          <th colspan="2" style="text-align:center;background:#f1f5f9;border-bottom:1px solid #e2e8f0;">📅 ${CPI_BASE_YEAR} Baseline</th>
+          ${isProjected ? `<th colspan="2" style="text-align:center;background:#f0fdf4;border-bottom:1px solid #86efac;border-left:2px solid #e2e8f0;">🔮 ${targetYr} Projected</th>` : ''}
+        </tr>
+        <tr>
+          <th style="background:#f1f5f9;">Taxable Income From</th>
+          <th style="background:#f1f5f9;">Up To</th>
+          ${isProjected ? `<th style="background:#f0fdf4;border-left:2px solid #e2e8f0;">Taxable Income From</th><th style="background:#f0fdf4;">Up To</th>` : ''}
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+    </div>
+    <p style="font-size:.75rem;color:var(--tl);margin-top:.6rem;">
+      ⚠️ ${isProjected ? `Projected thresholds assume ${userCpi}% annual CPI from the ${CPI_BASE_YEAR} baseline. Actual IRS brackets are published each October and may differ.` : `Showing ${CPI_BASE_YEAR} baseline only — select a future year to see projected values.`} These figures are for planning purposes only.
+    </p>`;
+
+  // IRMAA table — baseline + projected
+  const irmaaNames  = ['No Surcharge','Tier 1','Tier 2','Tier 3','Tier 4'];
+  const irmaaSurcharges = IRMAA_SURCHARGE;
+  const irmaaDesc   = ['Standard premium only','Moderate income','Higher income','High income','Highest income'];
+  const baseIrmaaTh = IRMAA_TH[filing]||IRMAA_TH.MFJ;
+  const irmaaRows   = baseIrmaaTh.map((th,i)=>{
+    const adjTh      = Math.round(th * mult);
+    const surcharge  = irmaaSurcharges[i+1]||0;
+    const thChanged  = isProjected && adjTh !== th;
+    return `<tr>
+      <td style="font-weight:600;color:#1e40af;">${irmaaNames[i+1]}</td>
+      <td style="background:#f1f5f9;">${fmt(th)}+</td>
+      ${isProjected ? `<td style="font-weight:${thChanged?'700':'400'};color:${thChanged?'#059669':'inherit'};border-left:2px solid #e2e8f0;">${fmt(adjTh)}+${thChanged?` <span style="font-size:.7rem;">▲</span>`:''}</td>` : ''}
+      <td style="color:#dc2626;font-weight:600;">+${fmt(surcharge)}/yr per person</td>
+    </tr>`;
+  }).join('');
+  const baseNoSurcharge = fmt(baseIrmaaTh[0]);
+  const adjNoSurcharge  = isProjected ? fmt(Math.round(baseIrmaaTh[0]*mult)) : null;
+  const irmaaOut = $('tb-irmaa-output');
+  if(irmaaOut) irmaaOut.innerHTML = `
+    <div class="tw">
+    <table>
+      <thead>
+        <tr>
+          <th rowspan="2">Tier</th>
+          <th style="background:#f1f5f9;text-align:center;">📅 ${CPI_BASE_YEAR} Baseline<br><span style="font-weight:400;font-size:.75rem;">MAGI Threshold (${filing})</span></th>
+          ${isProjected ? `<th style="background:#f0fdf4;text-align:center;border-left:2px solid #e2e8f0;">🔮 ${targetYr} Projected<br><span style="font-weight:400;font-size:.75rem;">MAGI Threshold (${filing})</span></th>` : ''}
+          <th>Annual Surcharge</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td style="font-weight:600;color:#166534;">No Surcharge</td>
+          <td style="background:#f1f5f9;">Below ${baseNoSurcharge}</td>
+          ${isProjected ? `<td style="border-left:2px solid #e2e8f0;">Below ${adjNoSurcharge}</td>` : ''}
+          <td style="color:#166534;">$0</td>
+        </tr>
+        ${irmaaRows}
+      </tbody>
+    </table>
+    </div>
+    <p style="font-size:.75rem;color:var(--tl);margin-top:.6rem;">IRMAA is applied based on MAGI from <strong>2 years prior</strong>. Plan withdrawals and Roth conversions to stay below the first threshold. Surcharge amounts shown are per person per year (not per couple).</p>`;
+
+  // Trigger recalculate with updated CPI
+  if(typeof calculate === 'function') calculate();
+}
 </script>
 </body>
 </html>"""
