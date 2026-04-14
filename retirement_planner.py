@@ -714,7 +714,7 @@ tr.hl td{background:#f0fdfa;}
   </div>
   <div class="nav-btns">
     <button class="nb" onclick="sw('accounts')">← Accounts</button>
-    <button class="nb pri" onclick="calculate()">⚡ Calculate My Plan</button>
+    <button class="nb pri" onclick="calculate(); location.reload();">⚡ Calculate My Plan</button>
   </div>
 </div>
 
@@ -1328,7 +1328,11 @@ function project(inp){
       const _otherPT = nqdcInc + penInc + othInc + rmd + (fTax * xbGainFrac);
       const provAGI_beforeTrad = taxableSSAmt(ssInc, _otherPT, filingStatus||'MFJ') + _otherPT;
       const prov = computeTaxVars(provAGI_beforeTrad, filingStatus||'MFJ', mult);
-      const room = prov.room;
+      const targetBracketRate = 0.24; // Target 24% bracket for traditional withdrawals
+      const brackets = BRACKETS[filingStatus || 'MFJ'];
+      const targetBracket = brackets.find(b => b.r === targetBracketRate);
+      const targetTop = targetBracket ? targetBracket.to * mult : prov.room;
+      const room = Math.max(0, targetTop - provAGI_beforeTrad);
       const availTrad1 = Math.max(0, tb1 - fTrad1);
       const availTrad2 = Math.max(0, tb2 - fTrad2);
       const availTrad = availTrad1 + availTrad2;
