@@ -1208,7 +1208,8 @@ function project(inp){
     pia1, ssAge1, pia2, ssAge2,
     pension1, pension2, pensionAge, otherIncome, otherIncomeStopAge,
     annualSpending, spendingReduceAge, reducedSpending,
-    trad0, roth0, taxable0, cash0, hsa0,
+    trad0, trad1, trad2, roth0, roth1, roth2,
+    taxable0, cash0, hsa0, hsa1, hsa2,
     stockReturn, bondReturn, stockAlloc, inflationRate, goalYears,
     hasNqdc, nqdcBalance, nqdcDistType, nqdcStartAge, nqdcDeferral,
     filingStatus, rothConversion,
@@ -1221,7 +1222,8 @@ function project(inp){
 
   // ── PHASE 1: ACCUMULATION ──────────────────────────────────
   // Run from current age up to (but not including) retirement age
-  let tb = trad0||0, rb = roth0||0, xb = taxable0||0, cb = cash0||0, hb = hsa0||0;
+  let tb1 = trad1||0, tb2 = trad2||0, rb = roth0||0, xb = taxable0||0, cb = cash0||0, hb = hsa0||0;
+  let tb = tb1 + tb2;
   let xbBasis = xb; // cost basis tracking for taxable brokerage (initial balance = basis)
   let nqdcBal = nqdcBalance||0;
   const accumRows = [];
@@ -1240,7 +1242,9 @@ function project(inp){
     const defAmt = parseFloat(nqdcDeferral)||0;
     if(hasNqdc && defAmt>0) nqdcBal += defAmt;
     // Add contributions then grow (taxable contributions add to cost basis)
-    tb = (tb + c401 + sc401) * (1 + pr);
+    tb1 = (tb1 + c401) * (1 + pr);
+    tb2 = (tb2 + sc401) * (1 + pr);
+    tb = tb1 + tb2;
     rb = (rb + cIRA + scIRA) * (1 + pr);
     xbBasis += cTax; // contributions are basis; growth is not
     xb = (xb + cTax) * (1 + pr);
@@ -1255,16 +1259,17 @@ function project(inp){
   }
 
   // Retirement-start balances (may equal current if already retired)
-  const retTrad    = tb;
+  const retTrad1   = tb1;
+  const retTrad2   = tb2;
   const retRoth    = rb;
   const retTaxable = xb;
   const retCash    = cb;
   const retHSA     = hb;
   const retNqdcBal = nqdcBal;
-  const retireStartBal = retTrad + retRoth + retTaxable + retCash + retHSA;
+  const retireStartBal = retTrad1 + retTrad2 + retRoth + retTaxable + retCash + retHSA;
 
   // ── PHASE 2: DISTRIBUTION ─────────────────────────────────
-  tb=retTrad; rb=retRoth; xb=retTaxable; cb=retCash; hb=retHSA;
+  tb1 = retTrad1; tb2 = retTrad2; tb = tb1 + tb2; rb=retRoth; xb=retTaxable; cb=retCash; hb=retHSA;
   // xbBasis carries over from accumulation phase (cost basis of taxable brokerage)
   nqdcBal=retNqdcBal;
   const magiHistory = [];
@@ -1302,8 +1307,11 @@ function project(inp){
     const extInc   = ssInc+penInc+othInc+nqdcInc;
     const portNeed = Math.max(0, spending-extInc);
     // Withdrawals — strict hierarchy: RMD -> Taxable -> Traditional (fill bracket room) -> HSA -> Cash -> Roth
-    const rmd = getRmd(tb, a1);
-    let fTrad = Math.min(tb, rmd), fTax = 0, fRoth = 0, fCash = 0, fHSA = 0;
+    const rmd1 = getRmd(tb1, a1);
+    const rmd2 = (hasSpouse && a2 !== null) ? getRmd(tb2, a2) : 0;
+    const rmd = rmd1 + rmd2;
+    let fTrad1 = Math.min(tb1, rmd1), fTrad2 = Math.min(tb2, rmd2);
+    let fTrad = fTrad1 + fTrad2, fTax = 0, fRoth = 0, fCash = 0, fHSA = 0;
     let need = Math.max(0, portNeed - fTrad);
     // 1) Taxable brokerage first
     // Compute taxable gain fraction: only the gain portion (above cost basis) is taxable at LTCG rates
@@ -1315,14 +1323,26 @@ function project(inp){
       xbBasis = Math.max(0, xbBasis - basisWithdrawn);
     }
     // 2) Traditional — but only up to current bracket room to avoid pushing into higher bracket
+    let extraTrad1 = 0, extraTrad2 = 0;
     if(need > 0){
       const _otherPT = nqdcInc + penInc + othInc + rmd + (fTax * xbGainFrac);
       const provAGI_beforeTrad = taxableSSAmt(ssInc, _otherPT, filingStatus||'MFJ') + _otherPT;
       const prov = computeTaxVars(provAGI_beforeTrad, filingStatus||'MFJ', mult);
       const room = prov.room;
-      const availTrad = Math.max(0, tb - fTrad);
+      const availTrad1 = Math.max(0, tb1 - fTrad1);
+      const availTrad2 = Math.max(0, tb2 - fTrad2);
+      const availTrad = availTrad1 + availTrad2;
       const takeTrad = Math.min(availTrad, need, room);
-      if(takeTrad > 0){ fTrad += takeTrad; need -= takeTrad; }
+      if(takeTrad > 0){
+        extraTrad1 = Math.min(availTrad1, Math.round(takeTrad * (availTrad1 / Math.max(availTrad, 1))));
+        extraTrad2 = Math.min(availTrad2, takeTrad - extraTrad1);
+        if(extraTrad1 + extraTrad2 < takeTrad){
+          const remaining = takeTrad - (extraTrad1 + extraTrad2);
+          if(availTrad1 - extraTrad1 >= remaining) extraTrad1 += remaining;
+          else extraTrad2 += remaining;
+        }
+        fTrad += takeTrad; need -= takeTrad;
+      }
     }
     // 3) HSA
     if(need > 0){ fHSA = Math.min(hb, need); need -= fHSA; }
@@ -1339,7 +1359,12 @@ function project(inp){
       const evals = evalConversionOptions(provAGI, tb, filingStatus||'MFJ', mult);
       if(evals && evals.amount>0){
         rothConv = evals.amount;
-        tb -= rothConv;
+        const convShare = tb > 0 ? evals.amount / tb : 0;
+        const convFrom1 = Math.min(Math.max(0, tb1 - fTrad1 - extraTrad1), Math.round((tb1 - fTrad1 - extraTrad1) * convShare));
+        const convFrom2 = Math.min(Math.max(0, tb2 - fTrad2 - extraTrad2), evals.amount - convFrom1);
+        tb1 = Math.max(0, tb1 - convFrom1);
+        tb2 = Math.max(0, tb2 - convFrom2);
+        tb = tb1 + tb2;
         rb += rothConv;
         // record chosen bracket label for display
         var chosenConvLabel = evals.choice;
@@ -1348,15 +1373,17 @@ function project(inp){
       }
     }
     // Growth — basis stays the same (growth is unrealized gain, not basis)
-    tb = Math.max(0,tb-fTrad)*(1+pr);
-    rb = Math.max(0,rb-fRoth)*(1+pr);
-    xb = Math.max(0,xb-fTax)*(1+pr);
+    tb1 = Math.max(0, tb1 - fTrad1 - extraTrad1) * (1 + pr);
+    tb2 = Math.max(0, tb2 - fTrad2 - extraTrad2) * (1 + pr);
+    tb = tb1 + tb2;
+    rb = Math.max(0, rb - fRoth) * (1 + pr);
+    xb = Math.max(0, xb - fTax) * (1 + pr);
     // xbBasis unchanged by growth (investment returns increase the unrealized gain, not basis)
-    hb = Math.max(0,hb-fHSA)*(1+pr*0.8);
-    cb = Math.max(0,cb-fCash)*(1+Math.min(inf*0.9,0.04));
-    const tot = tb+rb+xb+cb+hb;
+    hb = Math.max(0, hb - fHSA) * (1 + pr * 0.8);
+    cb = Math.max(0, cb - fCash) * (1 + Math.min(inf * 0.9, 0.04));
+    const tot = tb + rb + xb + cb + hb;
     // Final AGI (Pass 2) — taxable brokerage: only the gain portion (xbGainFrac) is taxable at LTCG rates
-    const _otherAGI = nqdcInc + penInc + othInc + fTrad + (fTax * xbGainFrac) + rothConv;
+    const _otherAGI = nqdcInc + penInc + othInc + fTrad + (fTax * xbGainFrac) + fHSA + rothConv;
     const _tssAmt   = taxableSSAmt(ssInc, _otherAGI, filingStatus||'MFJ');
     const agi = _tssAmt + _otherAGI;
     // Federal tax computed using CPI-indexed brackets
@@ -1388,7 +1415,7 @@ function project(inp){
       actual:fTrad+fTax+fRoth+fCash+fHSA,
       rmd, tb, rb, xb, cb, hb, tot,
       agi, margRate:fed.margRate, room:fed.room, irmaa:irmaaAdj, ltcgRate,
-      federalTax:fed.tax, stateTax, provAGI: (()=>{ const _o=nqdcInc+penInc+othInc+rmd; return taxableSSAmt(ssInc,_o,filingStatus||'MFJ')+_o; })(), convChoice: chosenConvLabel||null,
+      federalTax:fed.tax, stateTax, provAGI: (()=>{ const _o=nqdcInc+penInc+othInc+rmd+fHSA; return taxableSSAmt(ssInc,_o,filingStatus||'MFJ')+_o; })(), convChoice: chosenConvLabel||null,
       warnings
     });
     // record MAGI history for IRMAA lookback
@@ -1420,8 +1447,13 @@ function calculate(){
     annualSpending:num('annualSpending'), spendingReduceAge:int('spendingReduceAge')||0, reducedSpending:num('reducedSpending')||0,
     // Current balances (pre-accumulation)
     trad0:num('trad401k')+num('tradIRA')+(hs?num('spouse401k')+num('spouseTradIRA'):0),
+    trad1:num('trad401k')+num('tradIRA'),
+    trad2:hs?(num('spouse401k')+num('spouseTradIRA')):0,
     roth0:num('rothIRA')+num('roth401k')+(hs?num('spouseRothIRA')+num('spouseRoth401k'):0),
+    roth1:num('rothIRA')+num('roth401k'),
+    roth2:hs?(num('spouseRothIRA')+num('spouseRoth401k')):0,
     taxable0:num('taxable'), cash0:num('cash'), hsa0:num('hsa')+(hs?num('spouseHSA'):0),
+    hsa1:num('hsa'), hsa2:hs?num('spouseHSA'):0,
     stockReturn:num('stockReturn')||7, bondReturn:num('bondReturn')||4,
     stockAlloc:int('stockPct')||60, inflationRate:num('inflationRate')||3,
     filingStatus:filing,
