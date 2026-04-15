@@ -112,6 +112,41 @@ dqnc_annual_deferral        = 0
 current_salary              = 0
 dqnc_dist_type              = 10yr
 dqnc_dist_start_age         = 65
+
+# ================================================================
+[tax_brackets]
+# ================================================================
+# 2026 Federal Income Tax Brackets.
+# Format for mfj_brackets / single_brackets:
+#   rate_percent | upper_limit_dollars
+# Use a very large number (999999999) for the top (unlimited) bracket.
+# Edit these values to model future law changes or test scenarios.
+
+mfj_brackets =
+    10 | 24800
+    12 | 100800
+    22 | 211400
+    24 | 403550
+    32 | 512450
+    35 | 768700
+    37 | 999999999
+
+single_brackets =
+    10 | 12400
+    12 | 50400
+    22 | 105700
+    24 | 201775
+    32 | 256225
+    35 | 640600
+    37 | 999999999
+
+# Standard deduction (2026 est.)
+std_ded_mfj    = 31500
+std_ded_single = 15750
+
+# Long-term capital gains 0% threshold
+ltcg_0_mfj    = 96950
+ltcg_0_single = 48475
 """
 
 # ─────────────────────────────────────────────────────────────
@@ -130,6 +165,58 @@ def _calc_age(bday_str: str, default: int = 60) -> int:
         return max(0, age)
     except Exception:
         return default
+
+
+def _parse_tax_brackets(config: 'configparser.ConfigParser') -> dict | None:
+    """Parse [tax_brackets] section into JS-ready bracket arrays. Returns None if section absent."""
+    if not config.has_section('tax_brackets'):
+        return None
+
+    def _parse_bracket_lines(raw: str) -> list[dict]:
+        rows = []
+        for line in raw.splitlines():
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+            parts = [p.strip() for p in line.split('|')]
+            if len(parts) == 2:
+                try:
+                    rate = float(parts[0]) / 100.0
+                    upper = float(parts[1])
+                    rows.append({'r': rate, 'to': upper})
+                except ValueError:
+                    pass
+        return rows or None
+
+    def _get(key, default=''):
+        try:
+            return config.get('tax_brackets', key).strip()
+        except Exception:
+            return default
+
+    def _getf(key, default=0.0):
+        raw = _get(key, '')
+        try:
+            return float(raw) if raw else float(default)
+        except ValueError:
+            return float(default)
+
+    mfj_raw    = _get('mfj_brackets', '')
+    single_raw = _get('single_brackets', '')
+    mfj    = _parse_bracket_lines(mfj_raw)
+    single = _parse_bracket_lines(single_raw)
+
+    if not mfj and not single:
+        return None
+
+    return {
+        'mfj':            mfj,
+        'single':         single,
+        'std_ded_mfj':    _getf('std_ded_mfj',    31500),
+        'std_ded_single': _getf('std_ded_single',  15750),
+        'ltcg_0_mfj':     _getf('ltcg_0_mfj',     96950),
+        'ltcg_0_single':  _getf('ltcg_0_single',   48475),
+    }
 
 
 def parse_config(config_path: Path) -> dict:
@@ -248,6 +335,8 @@ def parse_config(config_path: Path) -> dict:
         'currentSalary':    getf('non-qualified deferred compensation plan', 'current_salary', 0),
         'nqdcDistType':  get('non-qualified deferred compensation plan', 'dqnc_dist_type', '10yr'),
         'nqdcStartAge':  geti('non-qualified deferred compensation plan', 'dqnc_dist_start_age', 65),
+        # Tax brackets
+        'tax_brackets':  _parse_tax_brackets(config),
     }
 
 
@@ -297,8 +386,12 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 .tab-btn:hover{color:var(--p);}
 .tab-btn.active{color:var(--p);border-bottom-color:var(--p);font-weight:600;}
 /* ── Content ── */
-.content{max-width:900px;margin:0 auto;padding:1.6rem 1rem;}
+.content{max-width:1400px;margin:0 auto;padding:1.6rem 1.5rem;}
 .tab-panel{display:none;}.tab-panel.active{display:block;}
+/* ── Two-column inputs layout ── */
+.two-col{display:grid;grid-template-columns:1fr 1fr;gap:1.5rem;align-items:start;}
+@media(max-width:960px){.two-col{grid-template-columns:1fr;}}
+.section-label{font-size:1rem;font-weight:700;color:var(--pd);margin:1.2rem 0 .6rem;padding:.45rem .8rem;background:var(--pl);border-radius:8px;border-left:4px solid var(--p);}
 /* ── Card ── */
 .card{background:#fff;border-radius:12px;padding:1.35rem;margin-bottom:1.2rem;box-shadow:0 1px 3px rgba(0,0,0,.08);border:1px solid var(--bd);}
 .card h2{font-size:.98rem;font-weight:600;color:var(--pd);margin-bottom:.9rem;padding-bottom:.45rem;border-bottom:2px solid var(--pl);display:flex;align-items:center;gap:.4rem;}
@@ -395,330 +488,370 @@ tr.hl td{background:#f0fdfa;}
 </div>
 
 <div class="tab-nav">
-  <button class="tab-btn active" onclick="sw('personal')">① Personal</button>
-  <button class="tab-btn" onclick="sw('income')">② Income</button>
-  <button class="tab-btn" onclick="sw('accounts')">③ Accounts</button>
-  <button class="tab-btn" onclick="sw('goals')">④ Goals</button>
-  <button class="tab-btn" onclick="sw('results')">⑤ Results</button>
-  <button class="tab-btn" onclick="sw('taxbrackets')">⑥ Tax Brackets</button>
+  <button class="tab-btn active" onclick="sw('inputs')">① Inputs</button>
+  <button class="tab-btn" onclick="sw('results')">② Results</button>
 </div>
 
-<div class="content">
-
-<!-- ══════════════ TAB 1 — PERSONAL ══════════════ -->
-<div id="tab-personal" class="tab-panel active">
+<!-- ══════════════ TAB 1 — INPUTS ══════════════ -->
+<div id="tab-inputs" class="tab-panel active">
   <div class="cfg-note">
-    ✏️ Values are pre-loaded from <strong>%%CFGFILE%%</strong>. You can adjust any field here for on-the-fly testing, then click <strong>Calculate</strong>.
+    ✏️ Values are pre-loaded from <strong>%%CFGFILE%%</strong>. Adjust any field and click <strong>Calculate</strong> to update results.
     To make permanent changes, edit the .txt file and re-run <code>python retirement_planner.py</code>.
   </div>
-  <div class="card">
-    <h2>👤 Primary Person</h2>
-    <div class="fg">
-      <div class="fm"><label>Your Name</label><input id="name1"></div>
-      <div class="fm"><label>Your Birthday</label>
-        <input type="text" id="bday1" placeholder="MM/DD/YYYY" maxlength="10"
-               oninput="fmtBday(this);updAge('bday1','agehint1')">
-        <span class="hint" id="agehint1">Enter birthday — age calculated automatically</span></div>
-      <div class="fm"><label>Planned Retirement Age</label><input type="number" id="retAge1" min="50" max="80"></div>
-      <div class="fm"><label>Life Expectancy</label><input type="number" id="lifeExp1" min="70" max="110">
-        <span class="hint">Plan conservatively — 90–95 is recommended.</span></div>
-    </div>
-  </div>
-  <div class="card">
-    <div class="trow">
-      <input type="checkbox" id="hasSpouse" onchange="toggleSpouse()">
-      <label for="hasSpouse">Include a Spouse / Partner</label>
-    </div>
-    <div id="spouse-section" class="hidden">
-      <h2>👤 Spouse / Partner</h2>
-      <div class="fg">
-        <div class="fm"><label>Spouse's Name</label><input id="name2"></div>
-        <div class="fm"><label>Spouse's Birthday</label>
-          <input type="text" id="bday2" placeholder="MM/DD/YYYY" maxlength="10"
-                 oninput="fmtBday(this);updAge('bday2','agehint2')">
-          <span class="hint" id="agehint2">Enter birthday — age calculated automatically</span></div>
-        <div class="fm"><label>Spouse's Retirement Age</label><input type="number" id="retAge2" min="50" max="80"></div>
-        <div class="fm"><label>Spouse's Life Expectancy</label><input type="number" id="lifeExp2" min="70" max="110"></div>
-      </div>
-    </div>
-  </div>
-  <div class="nav-btns"><span></span><button class="nb pri" onclick="sw('income')">Next: Income →</button></div>
-</div>
+  <div class="two-col">
 
-<!-- ══════════════ TAB 2 — INCOME ══════════════ -->
-<div id="tab-income" class="tab-panel">
-  <div class="card">
-    <h2>💼 Current Household Income</h2>
-    <div class="al info">💡 Enter current gross income. This determines your <strong>working tax bracket</strong> for Roth conversion timing guidance — should you convert now or wait until retirement?</div>
-    <div class="fg">
-      <div class="fm"><label>Your Current Annual Income</label>
-        <div class="pfx"><span>$</span><input type="number" id="yourIncome" min="0" oninput="updateIncomeHint()"></div>
-        <span class="hint">Gross salary, self-employment, or other earned income.</span></div>
-      <div class="fm" id="spouse-income-grp"><label>Spouse's Current Annual Income</label>
-        <div class="pfx"><span>$</span><input type="number" id="spouseIncome" min="0" oninput="updateIncomeHint()"></div>
-        <span class="hint">Enter 0 if not working.</span></div>
-    </div>
-    <div id="income-bracket-hint" class="ssp" style="margin-top:.55rem;"></div>
-  </div>
-  <div class="card">
-    <h2>🏛️ Social Security — <span id="ss1lbl">You</span></h2>
-    <div class="al info">💡 Get your estimate at <strong>ssa.gov/myaccount</strong>. Enter the <em>monthly amount at FRA (age 67 if born 1960+)</em>.</div>
-    <div class="fg">
-      <div class="fm"><label>Monthly Benefit at FRA (your PIA)</label>
-        <div class="pfx"><span>$</span><input type="number" id="pia1" min="0"></div>
-        <span class="hint">Enter 0 if no SS record.</span></div>
-      <div class="fm"><label>Planned Claiming Age</label>
-        <select id="ssAge1" onchange="updateSS()">
-          <option value="62">62 — Early (reduced)</option><option value="63">63</option><option value="64">64</option>
-          <option value="65">65</option><option value="66">66</option><option value="67">67 — FRA</option>
-          <option value="68">68 — Delayed (+8%)</option><option value="69">69 — Delayed (+16%)</option>
-          <option value="70">70 — Maximum (+24%)</option>
-        </select>
-        <span class="hint">Delay to 70 = +8%/yr above FRA.</span></div>
-    </div>
-    <div id="ssp1" class="ssp"></div>
-  </div>
-  <div id="ss2-card" class="card hidden">
-    <h2>🏛️ Social Security — <span id="ss2lbl">Spouse</span></h2>
-    <div class="fg">
-      <div class="fm"><label>Spouse Monthly Benefit at FRA (PIA)</label>
-        <div class="pfx"><span>$</span><input type="number" id="pia2" min="0"></div>
-        <span class="hint">Enter 0 if spouse relies on spousal benefit only.</span></div>
-      <div class="fm"><label>Spouse Claiming Age</label>
-        <select id="ssAge2" onchange="updateSS()">
-          <option value="62">62 — Early</option><option value="63">63</option><option value="64">64</option>
-          <option value="65">65</option><option value="66">66</option><option value="67">67 — FRA</option>
-          <option value="68">68</option><option value="69">69</option><option value="70">70 — Max</option>
-        </select></div>
-    </div>
-    <div id="ssp2" class="ssp"></div>
-    <div class="al info" style="margin-top:.7rem;">💡 <strong>Spousal Benefit:</strong> If spouse's own benefit &lt; 50% of your PIA, the higher spousal amount applies automatically.</div>
-  </div>
-  <div class="card">
-    <h2>💰 Other Income</h2>
-    <div class="slabel">Pension</div>
-    <div class="fg3">
-      <div class="fm"><label>Your Annual Pension</label><div class="pfx"><span>$</span><input type="number" id="pension1" min="0"></div></div>
-      <div class="fm" id="pension2g"><label>Spouse Annual Pension</label><div class="pfx"><span>$</span><input type="number" id="pension2" min="0"></div></div>
-      <div class="fm"><label>Pension starts at age</label><input type="number" id="pensionAge" min="50" max="80"></div>
-    </div>
-    <div class="divider"></div>
-    <div class="slabel">Part-Time / Rental / Other</div>
-    <div class="fg">
-      <div class="fm"><label>Annual Other Income</label><div class="pfx"><span>$</span><input type="number" id="otherIncome" min="0"></div></div>
-      <div class="fm"><label>Stops at age (blank = forever)</label><input type="number" id="otherIncomeStopAge" min="60" max="100"></div>
-    </div>
-  </div>
-  <div class="nav-btns">
-    <button class="nb" onclick="sw('personal')">← Personal</button>
-    <button class="nb pri" onclick="sw('accounts')">Next: Accounts →</button>
-  </div>
-</div>
+    <!-- ═══ LEFT COLUMN: Personal + Income ═══ -->
+    <div>
+      <div class="section-label">👤 Personal</div>
+      <div class="card">
+        <h2>👤 Primary Person</h2>
+        <div class="fg">
+          <div class="fm"><label>Your Name</label><input id="name1"></div>
+          <div class="fm"><label>Your Birthday</label>
+            <input type="text" id="bday1" placeholder="MM/DD/YYYY" maxlength="10"
+                   oninput="fmtBday(this);updAge('bday1','agehint1')">
+            <span class="hint" id="agehint1">Enter birthday — age calculated automatically</span></div>
+          <div class="fm"><label>Planned Retirement Age</label><input type="number" id="retAge1" min="50" max="80"></div>
+          <div class="fm"><label>Life Expectancy</label><input type="number" id="lifeExp1" min="70" max="110">
+            <span class="hint">Plan conservatively — 90–95 is recommended.</span></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="trow">
+          <input type="checkbox" id="hasSpouse" onchange="toggleSpouse()">
+          <label for="hasSpouse">Include a Spouse / Partner</label>
+        </div>
+        <div id="spouse-section" class="hidden">
+          <h2>👤 Spouse / Partner</h2>
+          <div class="fg">
+            <div class="fm"><label>Spouse's Name</label><input id="name2"></div>
+            <div class="fm"><label>Spouse's Birthday</label>
+              <input type="text" id="bday2" placeholder="MM/DD/YYYY" maxlength="10"
+                     oninput="fmtBday(this);updAge('bday2','agehint2')">
+              <span class="hint" id="agehint2">Enter birthday — age calculated automatically</span></div>
+            <div class="fm"><label>Spouse's Retirement Age</label><input type="number" id="retAge2" min="50" max="80"></div>
+            <div class="fm"><label>Spouse's Life Expectancy</label><input type="number" id="lifeExp2" min="70" max="110"></div>
+          </div>
+        </div>
+      </div>
 
-<!-- ══════════════ TAB 3 — ACCOUNTS ══════════════ -->
-<div id="tab-accounts" class="tab-panel">
-  <div class="al info">💡 Enter <strong>current balances today</strong>. Growth through retirement is modeled automatically.</div>
-  <div class="card">
-    <h2>📊 Tax-Deferred — Pre-Tax (401k / IRA)</h2>
-    <p style="font-size:.8rem;color:var(--tl);margin-bottom:.85rem;">Withdrawals taxed as ordinary income. <strong>RMDs required starting age 73.</strong></p>
-    <div class="fg">
-      <div class="fm"><label>Traditional 401(k) / 403(b)</label><div class="pfx"><span>$</span><input type="number" id="trad401k" min="0"></div></div>
-      <div class="fm"><label>Traditional IRA / SEP-IRA</label><div class="pfx"><span>$</span><input type="number" id="tradIRA" min="0"></div></div>
-    </div>
-    <div id="sp-trad" class="hidden" style="margin-top:.7rem;">
-      <div class="divider"></div><div class="slabel">Spouse's Tax-Deferred</div>
-      <div class="fg">
-        <div class="fm"><label>Spouse 401(k)</label><div class="pfx"><span>$</span><input type="number" id="spouse401k" min="0"></div></div>
-        <div class="fm"><label>Spouse Trad IRA</label><div class="pfx"><span>$</span><input type="number" id="spouseTradIRA" min="0"></div></div>
+      <div class="section-label">💰 Income</div>
+      <div class="card">
+        <h2>💼 Current Household Income</h2>
+        <div class="al info">💡 Enter current gross income. This determines your <strong>working tax bracket</strong> for Roth conversion timing guidance.</div>
+        <div class="fg">
+          <div class="fm"><label>Your Current Annual Income</label>
+            <div class="pfx"><span>$</span><input type="number" id="yourIncome" min="0" oninput="updateIncomeHint()"></div>
+            <span class="hint">Gross salary, self-employment, or other earned income.</span></div>
+          <div class="fm" id="spouse-income-grp"><label>Spouse's Current Annual Income</label>
+            <div class="pfx"><span>$</span><input type="number" id="spouseIncome" min="0" oninput="updateIncomeHint()"></div>
+            <span class="hint">Enter 0 if not working.</span></div>
+        </div>
+        <div id="income-bracket-hint" class="ssp" style="margin-top:.55rem;"></div>
       </div>
-    </div>
-  </div>
-  <div class="card">
-    <h2>🌱 Tax-Free — Roth</h2>
-    <p style="font-size:.8rem;color:var(--tl);margin-bottom:.85rem;">Qualified withdrawals <strong>completely tax-free</strong>. No RMDs. Best to draw last.</p>
-    <div class="fg">
-      <div class="fm"><label>Roth IRA</label><div class="pfx"><span>$</span><input type="number" id="rothIRA" min="0"></div></div>
-      <div class="fm"><label>Roth 401(k)</label><div class="pfx"><span>$</span><input type="number" id="roth401k" min="0"></div></div>
-    </div>
-    <div id="sp-roth" class="hidden" style="margin-top:.7rem;">
-      <div class="divider"></div><div class="slabel">Spouse's Roth</div>
-      <div class="fg">
-        <div class="fm"><label>Spouse Roth IRA</label><div class="pfx"><span>$</span><input type="number" id="spouseRothIRA" min="0"></div></div>
-        <div class="fm"><label>Spouse Roth 401(k)</label><div class="pfx"><span>$</span><input type="number" id="spouseRoth401k" min="0"></div></div>
+      <div class="card">
+        <h2>🏛️ Social Security — <span id="ss1lbl">You</span></h2>
+        <div class="al info">💡 Get your estimate at <strong>ssa.gov/myaccount</strong>. Enter the <em>monthly amount at FRA (age 67 if born 1960+)</em>.</div>
+        <div class="fg">
+          <div class="fm"><label>Monthly Benefit at FRA (your PIA)</label>
+            <div class="pfx"><span>$</span><input type="number" id="pia1" min="0"></div>
+            <span class="hint">Enter 0 if no SS record.</span></div>
+          <div class="fm"><label>Planned Claiming Age</label>
+            <select id="ssAge1" onchange="updateSS()">
+              <option value="62">62 — Early (reduced)</option><option value="63">63</option><option value="64">64</option>
+              <option value="65">65</option><option value="66">66</option><option value="67">67 — FRA</option>
+              <option value="68">68 — Delayed (+8%)</option><option value="69">69 — Delayed (+16%)</option>
+              <option value="70">70 — Maximum (+24%)</option>
+            </select>
+            <span class="hint">Delay to 70 = +8%/yr above FRA.</span></div>
+        </div>
+        <div id="ssp1" class="ssp"></div>
       </div>
-    </div>
-  </div>
-  <div class="card">
-    <h2>🏥 HSA &amp; Taxable</h2>
-    <div class="fg3">
-      <div class="fm"><label>Your HSA</label><div class="pfx"><span>$</span><input type="number" id="hsa" min="0"></div>
-        <span class="hint">Triple tax advantage for medical.</span></div>
-      <div class="fm" id="sp-hsa"><label>Spouse HSA</label><div class="pfx"><span>$</span><input type="number" id="spouseHSA" min="0"></div></div>
-      <div class="fm"><label>Taxable Brokerage</label><div class="pfx"><span>$</span><input type="number" id="taxable" min="0"></div></div>
-    </div>
-    <div class="fg3" style="margin-top:.7rem;">
-      <div class="fm"><label>Cash / Savings / CDs</label><div class="pfx"><span>$</span><input type="number" id="cash" min="0"></div></div>
-      <div class="fm"><label>Home Equity (net worth only)</label><div class="pfx"><span>$</span><input type="number" id="homeEquity" min="0"></div></div>
-    </div>
-  </div>
-  <div class="card">
-    <h2>💳 Debts</h2>
-    <div class="fg">
-      <div class="fm"><label>Mortgage Balance</label><div class="pfx"><span>$</span><input type="number" id="mortgage" min="0"></div></div>
-      <div class="fm"><label>Other Debts</label><div class="pfx"><span>$</span><input type="number" id="otherDebt" min="0"></div></div>
-    </div>
-  </div>
+      <div id="ss2-card" class="card hidden">
+        <h2>🏛️ Social Security — <span id="ss2lbl">Spouse</span></h2>
+        <div class="fg">
+          <div class="fm"><label>Spouse Monthly Benefit at FRA (PIA)</label>
+            <div class="pfx"><span>$</span><input type="number" id="pia2" min="0"></div>
+            <span class="hint">Enter 0 if spouse relies on spousal benefit only.</span></div>
+          <div class="fm"><label>Spouse Claiming Age</label>
+            <select id="ssAge2" onchange="updateSS()">
+              <option value="62">62 — Early</option><option value="63">63</option><option value="64">64</option>
+              <option value="65">65</option><option value="66">66</option><option value="67">67 — FRA</option>
+              <option value="68">68</option><option value="69">69</option><option value="70">70 — Max</option>
+            </select></div>
+        </div>
+        <div id="ssp2" class="ssp"></div>
+        <div class="al info" style="margin-top:.7rem;">💡 <strong>Spousal Benefit:</strong> If spouse's own benefit &lt; 50% of your PIA, the higher spousal amount applies automatically.</div>
+      </div>
+      <div class="card">
+        <h2>💰 Other Income</h2>
+        <div class="slabel">Pension</div>
+        <div class="fg3">
+          <div class="fm"><label>Your Annual Pension</label><div class="pfx"><span>$</span><input type="number" id="pension1" min="0"></div></div>
+          <div class="fm" id="pension2g"><label>Spouse Annual Pension</label><div class="pfx"><span>$</span><input type="number" id="pension2" min="0"></div></div>
+          <div class="fm"><label>Pension starts at age</label><input type="number" id="pensionAge" min="50" max="80"></div>
+        </div>
+        <div class="divider"></div>
+        <div class="slabel">Part-Time / Rental / Other</div>
+        <div class="fg">
+          <div class="fm"><label>Annual Other Income</label><div class="pfx"><span>$</span><input type="number" id="otherIncome" min="0"></div></div>
+          <div class="fm"><label>Stops at age (blank = forever)</label><input type="number" id="otherIncomeStopAge" min="60" max="100"></div>
+        </div>
+      </div>
+      <div class="section-label">🏦 Accounts</div>
+      <div class="al info">💡 Enter <strong>current balances today</strong>. Growth through retirement is modeled automatically.</div>
+      <div class="card">
+        <h2>📊 Tax-Deferred — Pre-Tax (401k / IRA)</h2>
+        <p style="font-size:.8rem;color:var(--tl);margin-bottom:.85rem;">Withdrawals taxed as ordinary income. <strong>RMDs required starting age 73.</strong></p>
+        <div class="fg">
+          <div class="fm"><label>Traditional 401(k) / 403(b)</label><div class="pfx"><span>$</span><input type="number" id="trad401k" min="0"></div></div>
+          <div class="fm"><label>Traditional IRA / SEP-IRA</label><div class="pfx"><span>$</span><input type="number" id="tradIRA" min="0"></div></div>
+        </div>
+        <div id="sp-trad" class="hidden" style="margin-top:.7rem;">
+          <div class="divider"></div><div class="slabel">Spouse's Tax-Deferred</div>
+          <div class="fg">
+            <div class="fm"><label>Spouse 401(k)</label><div class="pfx"><span>$</span><input type="number" id="spouse401k" min="0"></div></div>
+            <div class="fm"><label>Spouse Trad IRA</label><div class="pfx"><span>$</span><input type="number" id="spouseTradIRA" min="0"></div></div>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <h2>🌱 Tax-Free — Roth</h2>
+        <p style="font-size:.8rem;color:var(--tl);margin-bottom:.85rem;">Qualified withdrawals <strong>completely tax-free</strong>. No RMDs. Best to draw last.</p>
+        <div class="fg">
+          <div class="fm"><label>Roth IRA</label><div class="pfx"><span>$</span><input type="number" id="rothIRA" min="0"></div></div>
+          <div class="fm"><label>Roth 401(k)</label><div class="pfx"><span>$</span><input type="number" id="roth401k" min="0"></div></div>
+        </div>
+        <div id="sp-roth" class="hidden" style="margin-top:.7rem;">
+          <div class="divider"></div><div class="slabel">Spouse's Roth</div>
+          <div class="fg">
+            <div class="fm"><label>Spouse Roth IRA</label><div class="pfx"><span>$</span><input type="number" id="spouseRothIRA" min="0"></div></div>
+            <div class="fm"><label>Spouse Roth 401(k)</label><div class="pfx"><span>$</span><input type="number" id="spouseRoth401k" min="0"></div></div>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <h2>🏥 HSA &amp; Taxable</h2>
+        <div class="fg3">
+          <div class="fm"><label>Your HSA</label><div class="pfx"><span>$</span><input type="number" id="hsa" min="0"></div>
+            <span class="hint">Triple tax advantage for medical.</span></div>
+          <div class="fm" id="sp-hsa"><label>Spouse HSA</label><div class="pfx"><span>$</span><input type="number" id="spouseHSA" min="0"></div></div>
+          <div class="fm"><label>Taxable Brokerage</label><div class="pfx"><span>$</span><input type="number" id="taxable" min="0"></div></div>
+        </div>
+        <div class="fg3" style="margin-top:.7rem;">
+          <div class="fm"><label>Cash / Savings / CDs</label><div class="pfx"><span>$</span><input type="number" id="cash" min="0"></div></div>
+          <div class="fm"><label>Home Equity (net worth only)</label><div class="pfx"><span>$</span><input type="number" id="homeEquity" min="0"></div></div>
+        </div>
+      </div>
+      <div class="card">
+        <h2>💳 Debts</h2>
+        <div class="fg">
+          <div class="fm"><label>Mortgage Balance</label><div class="pfx"><span>$</span><input type="number" id="mortgage" min="0"></div></div>
+          <div class="fm"><label>Other Debts</label><div class="pfx"><span>$</span><input type="number" id="otherDebt" min="0"></div></div>
+        </div>
+      </div>
+    </div><!-- end left column -->
 
-  <div class="card" style="border:2px solid #10b981;">
-    <h2 style="color:#047857;">📥 Pre-Retirement Contributions</h2>
-    <div class="al" style="background:#d1fae5;color:#065f46;border:1px solid #6ee7b7;margin-bottom:.9rem;">
-      Contributions are modeled from <strong>today until retirement age</strong>. Use <em>"max"</em> or a dollar amount.
-      <br>2025 IRS limits: 401(k) $23,500 (+$7,500 catch-up 50-59/64+; +$11,250 super catch-up 60-63) · IRA/Roth $7,000 (+$1,000 catch-up 50+).
-    </div>
-    <div class="fg">
-      <div class="fm"><label>Your 401(k) Annual Contribution</label>
-        <input type="text" id="contrib401k" placeholder="max or dollar amount">
-        <span class="hint" id="c401k-hint"></span></div>
-      <div class="fm"><label>Your Roth IRA / Backdoor Roth</label>
-        <input type="text" id="contribRoth" placeholder="max or dollar amount">
-        <span class="hint" id="cRoth-hint">High earners: use Backdoor Roth (no income limit).</span></div>
-    </div>
-    <div class="fg" style="margin-top:.65rem;">
-      <div class="fm"><label>Additional Taxable Savings / Year</label>
-        <div class="pfx"><span>$</span><input type="number" id="contribTaxable" min="0" value="0"></div>
-        <span class="hint">Savings to brokerage after maxing tax-advantaged accounts.</span></div>
-    </div>
-    <div id="sp-contrib" class="hidden" style="margin-top:.65rem;">
-      <div class="divider"></div><div class="slabel">Spouse Contributions</div>
-      <div class="fg">
-        <div class="fm"><label>Spouse 401(k) Contribution</label>
-          <input type="text" id="spouseContrib401k" placeholder="max or 0"></div>
-        <div class="fm"><label>Spouse Roth IRA</label>
-          <input type="text" id="spouseContribRoth" placeholder="max or 0"></div>
+    <!-- ═══ RIGHT COLUMN: Contributions + NQDC + Goals + Tax Brackets ═══ -->
+    <div>
+      <div class="section-label">📥 Pre-Retirement Contributions &amp; Planning</div>
+      <div class="card" style="border:2px solid #10b981;">
+        <h2 style="color:#047857;">📥 Pre-Retirement Contributions</h2>
+        <div class="al" style="background:#d1fae5;color:#065f46;border:1px solid #6ee7b7;margin-bottom:.9rem;">
+          Contributions are modeled from <strong>today until retirement age</strong>. Use <em>"max"</em> or a dollar amount.
+          <br>2025 IRS limits: 401(k) $23,500 (+$7,500 catch-up 50-59/64+; +$11,250 super catch-up 60-63) · IRA/Roth $7,000 (+$1,000 catch-up 50+).
+        </div>
+        <div class="fg">
+          <div class="fm"><label>Your 401(k) Annual Contribution</label>
+            <input type="text" id="contrib401k" placeholder="max or dollar amount">
+            <span class="hint" id="c401k-hint"></span></div>
+          <div class="fm"><label>Your Roth IRA / Backdoor Roth</label>
+            <input type="text" id="contribRoth" placeholder="max or dollar amount">
+            <span class="hint" id="cRoth-hint">High earners: use Backdoor Roth (no income limit).</span></div>
+        </div>
+        <div class="fg" style="margin-top:.65rem;">
+          <div class="fm"><label>Additional Taxable Savings / Year</label>
+            <div class="pfx"><span>$</span><input type="number" id="contribTaxable" min="0" value="0"></div>
+            <span class="hint">Savings to brokerage after maxing tax-advantaged accounts.</span></div>
+        </div>
+        <div id="sp-contrib" class="hidden" style="margin-top:.65rem;">
+          <div class="divider"></div><div class="slabel">Spouse Contributions</div>
+          <div class="fg">
+            <div class="fm"><label>Spouse 401(k) Contribution</label>
+              <input type="text" id="spouseContrib401k" placeholder="max or 0"></div>
+            <div class="fm"><label>Spouse Roth IRA</label>
+              <input type="text" id="spouseContribRoth" placeholder="max or 0"></div>
+          </div>
+        </div>
+        <div id="accum-preview" class="ssp" style="margin-top:.75rem;"></div>
       </div>
-    </div>
-    <div id="accum-preview" class="ssp" style="margin-top:.75rem;"></div>
-  </div>
+      <div class="card" style="border:2px solid #6366f1;">
+        <h2 style="color:#4f46e5;">🏢 Non-Qualified Deferred Compensation (NQDC)</h2>
+        <div class="al" style="background:#ede9fe;color:#3730a3;border:1px solid #c4b5fd;margin-bottom:.9rem;">
+          A <strong>Non-Qualified Deferred Compensation (NQDC)</strong> plan lets you defer a portion of salary or bonus before taxes, with distributions paid out in retirement. Unlike 401(k)s, NQDC has no IRS contribution cap — but balances are an <em>unsecured liability</em> of your employer.
+        </div>
+        <div class="trow" style="border-color:#a5b4fc;background:#eef2ff;">
+          <input type="checkbox" id="hasNqdc" onchange="toggleNqdc()">
+          <label for="hasNqdc" style="color:#3730a3;">I have a Non-Qualified Deferred Compensation (NQDC) plan</label>
+        </div>
+        <div id="nqdc-section" class="hidden">
+          <div class="fg3">
+            <div class="fm"><label>Current NQDC Balance</label>
+              <div class="pfx"><span>$</span><input type="number" id="nqdcBalance" min="0" value="0"></div>
+              <span class="hint">Total accumulated deferred balance today.</span></div>
+            <div class="fm"><label>Annual Deferral Amount</label>
+              <div class="pfx"><span>$</span><input type="number" id="nqdcDeferral" min="0" value="0"></div>
+              <span class="hint">How much you defer per year (salary + bonus).</span></div>
+            <div class="fm"><label>Current Annual Salary</label>
+              <div class="pfx"><span>$</span><input type="number" id="currentSalary" min="0" value="0"></div>
+              <span class="hint">Used to estimate any employer match on excess compensation.</span></div>
+          </div>
+          <div class="fg" style="margin-top:.7rem;">
+            <div class="fm"><label>Distribution Schedule</label>
+              <select id="nqdcDistType">
+                <option value="lump">Lump Sum at retirement</option>
+                <option value="5yr">5-Year installments</option>
+                <option value="10yr" selected>10-Year installments</option>
+              </select>
+              <span class="hint">Longer installments = more bracket control.</span></div>
+            <div class="fm"><label>Distribution Start Age</label>
+              <input type="number" id="nqdcStartAge" min="50" max="80" value="65">
+              <span class="hint">Usually equals your planned retirement age.</span></div>
+          </div>
+        </div>
+      </div>
 
-  <div class="card" style="border:2px solid #6366f1;">
-    <h2 style="color:#4f46e5;">🏢 Non-Qualified Deferred Compensation (NQDC)</h2>
-    <div class="al" style="background:#ede9fe;color:#3730a3;border:1px solid #c4b5fd;margin-bottom:.9rem;">
-      A <strong>Non-Qualified Deferred Compensation (NQDC)</strong> plan lets you defer a portion of salary or bonus before taxes, with distributions paid out in retirement. Unlike 401(k)s, NQDC has no IRS contribution cap — but balances are an <em>unsecured liability</em> of your employer.
-    </div>
-    <div class="trow" style="border-color:#a5b4fc;background:#eef2ff;">
-      <input type="checkbox" id="hasNqdc" onchange="toggleNqdc()">
-      <label for="hasNqdc" style="color:#3730a3;">I have a Non-Qualified Deferred Compensation (NQDC) plan</label>
-    </div>
-    <div id="nqdc-section" class="hidden">
-      <div class="fg3">
-        <div class="fm"><label>Current NQDC Balance</label>
-          <div class="pfx"><span>$</span><input type="number" id="nqdcBalance" min="0" value="0"></div>
-          <span class="hint">Total accumulated deferred balance today.</span></div>
-        <div class="fm"><label>Annual Deferral Amount</label>
-          <div class="pfx"><span>$</span><input type="number" id="nqdcDeferral" min="0" value="0"></div>
-          <span class="hint">How much you defer per year (salary + bonus).</span></div>
-        <div class="fm"><label>Current Annual Salary</label>
-          <div class="pfx"><span>$</span><input type="number" id="currentSalary" min="0" value="0"></div>
-          <span class="hint">Used to estimate any employer match on excess compensation.</span></div>
+      <div class="section-label">🎯 Goals &amp; Assumptions</div>
+      <div class="card">
+        <h2>🎯 Spending Goal</h2>
+        <div class="fg">
+          <div class="fm"><label>Annual Retirement Spending (today's $)</label>
+            <div class="pfx"><span>$</span><input type="number" id="annualSpending" min="0"></div>
+            <span class="hint">Total household spend: taxes, travel, healthcare, etc.</span></div>
+          <div class="fm"><label>Reduce Spending After Age (optional)</label>
+            <input type="number" id="spendingReduceAge" min="65" max="100">
+            <span class="hint">The "slow-go" phase — many spend ~20% less after 80.</span></div>
+        </div>
+        <div class="fg" style="margin-top:.7rem;">
+          <div class="fm"><label>Reduced Amount (today's $)</label>
+            <div class="pfx"><span>$</span><input type="number" id="reducedSpending" min="0"></div></div>
+        </div>
       </div>
-      <div class="fg" style="margin-top:.7rem;">
-        <div class="fm"><label>Distribution Schedule</label>
-          <select id="nqdcDistType">
-            <option value="lump">Lump Sum at retirement</option>
-            <option value="5yr">5-Year installments</option>
-            <option value="10yr" selected>10-Year installments</option>
+      <div class="card">
+        <h2>🏁 Portfolio Duration Goal</h2>
+        <div class="fm ff"><label>Goal Type</label>
+          <select id="goalType" onchange="updateSWR()">
+            <option value="30">30 years — 4.0% safe withdrawal rate</option>
+            <option value="35">35 years — 3.7% safe withdrawal rate</option>
+            <option value="40">40 years — 3.3% safe withdrawal rate</option>
+            <option value="perpetual">Perpetual — preserve principal (3.0%)</option>
+            <option value="custom">Custom duration</option>
           </select>
-          <span class="hint">Longer installments = more bracket control.</span></div>
-        <div class="fm"><label>Distribution Start Age</label>
-          <input type="number" id="nqdcStartAge" min="50" max="80" value="65">
-          <span class="hint">Usually equals your planned retirement age.</span></div>
+        </div>
+        <div id="custom-yrs" class="hidden" style="margin-top:.7rem;">
+          <div class="fm"><label>Custom Duration (years)</label><input type="number" id="customGoalYears" min="10" max="70" value="25"></div>
+        </div>
+        <div id="swr-disp" class="ssp" style="margin-top:.7rem;"></div>
       </div>
-    </div>
-  </div>
+      <div class="card">
+        <h2>📐 Asset Allocation</h2>
+        <div class="presets">
+          <button class="pb" onclick="setPreset(30)">Conservative 30/70</button>
+          <button class="pb" onclick="setPreset(60)">Moderate 60/40</button>
+          <button class="pb" onclick="setPreset(80)">Growth 80/20</button>
+          <button class="pb" onclick="setPreset(100)">All-Stocks</button>
+        </div>
+        <div class="srow">
+          <span style="font-size:.8rem;color:var(--tl);">Bonds</span>
+          <input type="range" id="stockPct" min="0" max="100" step="5" oninput="updAlloc()">
+          <span style="font-size:.8rem;color:var(--tl);">Stocks</span>
+          <span class="sv" id="allocDisp"></span>
+        </div>
+      </div>
+      <div class="card">
+        <h2>📈 Return Assumptions</h2>
+        <div class="al info">Nominal (before inflation) returns. Spending inflates each year. Stocks historical avg ~10%, conservative ~7%.</div>
+        <div class="fg3">
+          <div class="fm"><label>Stock Return %</label><div class="pfx"><span>%</span><input type="number" id="stockReturn" step="0.1" min="0" max="20"></div></div>
+          <div class="fm"><label>Bond Return %</label><div class="pfx"><span>%</span><input type="number" id="bondReturn" step="0.1" min="0" max="15"></div></div>
+          <div class="fm"><label>Inflation Rate %</label><div class="pfx"><span>%</span><input type="number" id="inflationRate" step="0.1" min="0" max="10"></div></div>
+        </div>
+        <div class="fg3" style="margin-top:.7rem;">
+          <div class="fm"><label>Tax Filing Status</label>
+            <select id="filingStatus">
+              <option value="MFJ">Married Filing Jointly (MFJ)</option>
+              <option value="Single">Single / Head of Household</option>
+            </select>
+            <span class="hint">Determines tax brackets and standard deduction.</span>
+          </div>
+        </div>
+        <div class="trow" style="margin-top:.7rem;">
+          <input type="checkbox" id="rothConversion">
+          <label for="rothConversion">Model Roth conversion strategy (convert trad → Roth in low-income years before RMDs)</label>
+        </div>
+      </div>
 
-  <div class="nav-btns">
-    <button class="nb" onclick="sw('income')">← Income</button>
-    <button class="nb pri" onclick="sw('goals')">Next: Goals →</button>
+      <div class="section-label">📐 Tax Brackets (2026 Baseline)</div>
+      <div class="card">
+        <h2>✏️ Federal Income Tax Brackets</h2>
+        <p style="color:var(--tl);font-size:.85rem;margin-bottom:.8rem;">Edit bracket upper limits and standard deductions below. Click <strong>Apply Brackets</strong> to re-run the simulation with your changes. Values are sourced from your input file.</p>
+        <div class="tw" style="margin-bottom:.8rem;">
+          <table style="width:100%;border-collapse:collapse;">
+            <thead><tr style="background:var(--pl);">
+              <th style="padding:.4rem .6rem;text-align:left;font-size:.82rem;">Rate</th>
+              <th style="padding:.4rem .6rem;text-align:left;font-size:.82rem;">MFJ Upper Limit ($)</th>
+              <th style="padding:.4rem .6rem;text-align:left;font-size:.82rem;">Single Upper Limit ($)</th>
+            </tr></thead>
+            <tbody id="bracket-edit-body"></tbody>
+          </table>
+        </div>
+        <div class="fg3" style="margin-bottom:.7rem;">
+          <div class="fm"><label>Std Deduction — MFJ ($)</label><input type="number" id="std-ded-mfj" min="0"></div>
+          <div class="fm"><label>Std Deduction — Single ($)</label><input type="number" id="std-ded-single" min="0"></div>
+          <div class="fm"><label>LTCG 0% Threshold — MFJ ($)</label><input type="number" id="ltcg-0-mfj" min="0"></div>
+        </div>
+        <div class="nav-btns" style="justify-content:flex-start;">
+          <button class="nb pri" onclick="applyEditedBrackets()">✅ Apply Brackets &amp; Recalculate</button>
+          <button class="nb" onclick="resetBracketsToDefault()" style="margin-left:.5rem;">↩ Reset to Defaults</button>
+        </div>
+      </div>
+      <div class="card">
+        <h2>📐 Bracket Inflation Projector</h2>
+        <p style="color:var(--tl);font-size:.85rem;margin-bottom:1rem;">View inflation-adjusted brackets for a future year. Changing CPI here also re-runs your full simulation.</p>
+        <div class="fg" style="align-items:flex-end;gap:1.2rem;flex-wrap:wrap;">
+          <div class="fm">
+            <label>CPI Inflation Rate %</label>
+            <input type="number" id="tb-cpi" step="0.1" min="0" max="15" value="3.0" style="width:100px;">
+          </div>
+          <div class="fm">
+            <label>Project To Year</label>
+            <input type="number" id="tb-year" min="2026" max="2075" value="2035" style="width:110px;">
+          </div>
+          <div class="fm">
+            <label>Filing Status</label>
+            <select id="tb-filing" style="width:120px;">
+              <option value="MFJ">Married (MFJ)</option>
+              <option value="Single">Single</option>
+            </select>
+          </div>
+          <button class="nb pri" onclick="renderTaxBracketTab()">Update Projection</button>
+        </div>
+        <div id="tb-output" style="margin-top:1.2rem;"></div>
+      </div>
+      <div class="card">
+        <h2>🏥 IRMAA Medicare Surcharge Tiers</h2>
+        <p style="color:var(--tl);font-size:.88rem;margin-bottom:.8rem;">Medicare Part B premiums increase for higher-income retirees based on MAGI from 2 years prior. Thresholds below are inflation-projected to the selected year.</p>
+        <div id="tb-irmaa-output"></div>
+      </div>
+    </div><!-- end right column -->
+  </div><!-- end two-col -->
+
+  <div class="nav-btns" style="margin-top:1.2rem;justify-content:center;">
+    <button class="nb pri" style="font-size:1.05rem;padding:.8rem 2.5rem;" onclick="calculate();">⚡ Calculate My Plan</button>
   </div>
 </div>
 
-<!-- ══════════════ TAB 4 — GOALS ══════════════ -->
-<div id="tab-goals" class="tab-panel">
-  <div class="card">
-    <h2>🎯 Spending Goal</h2>
-    <div class="fg">
-      <div class="fm"><label>Annual Retirement Spending (today's $)</label>
-        <div class="pfx"><span>$</span><input type="number" id="annualSpending" min="0"></div>
-        <span class="hint">Total household spend: taxes, travel, healthcare, etc.</span></div>
-      <div class="fm"><label>Reduce Spending After Age (optional)</label>
-        <input type="number" id="spendingReduceAge" min="65" max="100">
-        <span class="hint">The "slow-go" phase — many spend ~20% less after 80.</span></div>
-    </div>
-    <div class="fg" style="margin-top:.7rem;">
-      <div class="fm"><label>Reduced Amount (today's $)</label>
-        <div class="pfx"><span>$</span><input type="number" id="reducedSpending" min="0"></div></div>
-    </div>
-  </div>
-  <div class="card">
-    <h2>🏁 Portfolio Duration Goal</h2>
-    <div class="fm ff"><label>Goal Type</label>
-      <select id="goalType" onchange="updateSWR()">
-        <option value="30">30 years — 4.0% safe withdrawal rate</option>
-        <option value="35">35 years — 3.7% safe withdrawal rate</option>
-        <option value="40">40 years — 3.3% safe withdrawal rate</option>
-        <option value="perpetual">Perpetual — preserve principal (3.0%)</option>
-        <option value="custom">Custom duration</option>
-      </select>
-    </div>
-    <div id="custom-yrs" class="hidden" style="margin-top:.7rem;">
-      <div class="fm"><label>Custom Duration (years)</label><input type="number" id="customGoalYears" min="10" max="70" value="25"></div>
-    </div>
-    <div id="swr-disp" class="ssp" style="margin-top:.7rem;"></div>
-  </div>
-  <div class="card">
-    <h2>📐 Asset Allocation</h2>
-    <div class="presets">
-      <button class="pb" onclick="setPreset(30)">Conservative 30/70</button>
-      <button class="pb" onclick="setPreset(60)">Moderate 60/40</button>
-      <button class="pb" onclick="setPreset(80)">Growth 80/20</button>
-      <button class="pb" onclick="setPreset(100)">All-Stocks</button>
-    </div>
-    <div class="srow">
-      <span style="font-size:.8rem;color:var(--tl);">Bonds</span>
-      <input type="range" id="stockPct" min="0" max="100" step="5" oninput="updAlloc()">
-      <span style="font-size:.8rem;color:var(--tl);">Stocks</span>
-      <span class="sv" id="allocDisp"></span>
-    </div>
-  </div>
-  <div class="card">
-    <h2>📈 Return Assumptions</h2>
-    <div class="al info">Nominal (before inflation) returns. Spending inflates each year. Stocks historical avg ~10%, conservative ~7%.</div>
-    <div class="fg3">
-      <div class="fm"><label>Stock Return %</label><div class="pfx"><span>%</span><input type="number" id="stockReturn" step="0.1" min="0" max="20"></div></div>
-      <div class="fm"><label>Bond Return %</label><div class="pfx"><span>%</span><input type="number" id="bondReturn" step="0.1" min="0" max="15"></div></div>
-      <div class="fm"><label>Inflation Rate %</label><div class="pfx"><span>%</span><input type="number" id="inflationRate" step="0.1" min="0" max="10"></div></div>
-    </div>
-    <div class="fg3" style="margin-top:.7rem;">
-      <div class="fm"><label>Tax Filing Status</label>
-        <select id="filingStatus">
-          <option value="MFJ">Married Filing Jointly (MFJ)</option>
-          <option value="Single">Single / Head of Household</option>
-        </select>
-        <span class="hint">Determines tax brackets and standard deduction.</span>
-      </div>
-    </div>
-    <div class="trow" style="margin-top:.7rem;">
-      <input type="checkbox" id="rothConversion">
-      <label for="rothConversion">Model Roth conversion strategy (convert trad → Roth in low-income years before RMDs)</label>
-    </div>
-  </div>
-  <div class="nav-btns">
-    <button class="nb" onclick="sw('accounts')">← Accounts</button>
-    <button class="nb pri" onclick="calculate();">⚡ Calculate My Plan</button>
-  </div>
-</div>
-
-<!-- ══════════════ TAB 5 — RESULTS ══════════════ -->
+<!-- ══════════════ TAB 2 — RESULTS ══════════════ -->
 <div id="tab-results" class="tab-panel">
   <div id="res-placeholder" class="card" style="text-align:center;padding:2.5rem;">
     <div style="font-size:3rem;margin-bottom:.9rem;">📊</div>
@@ -772,7 +905,7 @@ tr.hl td{background:#f0fdfa;}
         </div>
       </details>
       <div class="fg">
-        <div class="fm"><label>Iterations</label><input type="number" id="mcIterations" min="100" value="1000"></div>
+        <div class="fm"><label>Iterations</label><input type="number" id="mcIterations" min="100" value="5000"></div>
         <div class="fm"><label>Annual Volatility % (σ)</label><input type="number" id="mcVol" step="0.1" min="0" value="12"></div>
       </div>
       <div style="margin-top:.7rem;" class="nav-btns"><button class="nb pri" onclick="runMonteCarlo()">▶ Run Monte Carlo</button></div>
@@ -790,14 +923,15 @@ tr.hl td{background:#f0fdfa;}
     <div class="card">
       <h2>📋 Year-by-Year Projection</h2>
       <div style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap;margin-bottom:.6rem;">
-        <button class="cb-btn" onclick="toggleTbl()">Show / Hide Detail Table</button>
+        <button class="cb-btn" onclick="toggleTbl()">Show / Hide Table</button>
         <label style="display:flex;align-items:center;gap:.4rem;font-size:.83rem;cursor:pointer;">
           <input type="checkbox" id="realDollarsToggle" onchange="rerenderTable()" style="width:16px;height:16px;">
           Show in <strong>today's dollars</strong> (inflation-adjusted)
         </label>
         <span id="dollarsModeNote" style="font-size:.77rem;color:var(--tl);"></span>
+        <button class="cb-btn" onclick="exportTableToCSV()" style="margin-left:auto;">⬇ Export to CSV</button>
       </div>
-      <div id="tbl-wrap" class="hidden">
+      <div id="tbl-wrap">
         <div class="tw">
           <table><thead><tr>
             <th>Year</th><th>Age</th><th>SS Income</th><th>NQDC</th><th>Other Inc.</th>
@@ -812,36 +946,6 @@ tr.hl td{background:#f0fdfa;}
   </div>
 </div>
 
-<div id="tab-taxbrackets" class="tab-panel">
-  <div class="card">
-    <h2>📐 Tax Brackets &amp; Inflation Projector</h2>
-    <p style="color:var(--tl);font-size:.88rem;margin-bottom:1rem;">View inflation-adjusted federal tax brackets for any future year. Change the CPI rate below and click <strong>Update Brackets</strong> — this also re-runs your full simulation with the new rate.</p>
-    <div class="fg" style="align-items:flex-end;gap:1.2rem;flex-wrap:wrap;">
-      <div class="fm">
-        <label>CPI Inflation Rate %</label>
-        <input type="number" id="tb-cpi" step="0.1" min="0" max="15" value="3.0" style="width:100px;">
-      </div>
-      <div class="fm">
-        <label>Project To Year</label>
-        <input type="number" id="tb-year" min="2026" max="2075" value="2035" style="width:110px;">
-      </div>
-      <div class="fm">
-        <label>Filing Status</label>
-        <select id="tb-filing" style="width:120px;">
-          <option value="MFJ">Married (MFJ)</option>
-          <option value="Single">Single</option>
-        </select>
-      </div>
-      <button class="nb pri" onclick="renderTaxBracketTab()">Update Brackets</button>
-    </div>
-    <div id="tb-output" style="margin-top:1.2rem;"></div>
-  </div>
-  <div class="card">
-    <h2>🏥 IRMAA Medicare Surcharge Tiers</h2>
-    <p style="color:var(--tl);font-size:.88rem;margin-bottom:.8rem;">Medicare Part B premiums increase for higher-income retirees based on MAGI from 2 years prior. Thresholds below are inflation-projected to the selected year.</p>
-    <div id="tb-irmaa-output"></div>
-  </div>
-</div>
 
 </div><!-- .content -->
 
@@ -853,13 +957,16 @@ const RMD = {73:26.5,74:25.5,75:24.6,76:23.7,77:22.9,78:22.0,79:21.1,80:20.2,81:
 const FRA = 67;
 let pChart = null, iChart = null;
 
-// ── 2026 Federal Tax Brackets (IRS published) ────────────────
-const BRACKETS = {
+// ── 2026 Federal Tax Brackets (IRS published) — overridable from input file ──
+let BRACKETS = {
   MFJ:    [{r:.10,to:24800},{r:.12,to:100800},{r:.22,to:211400},{r:.24,to:403550},{r:.32,to:512450},{r:.35,to:768700},{r:.37,to:1e9}],
   Single: [{r:.10,to:12400},{r:.12,to:50400},{r:.22,to:105700},{r:.24,to:201775},{r:.32,to:256225},{r:.35,to:640600},{r:.37,to:1e9}]
 };
-const STD_DED  = {MFJ:31500, Single:15750};   // 2026 est.
-const LTCG_0   = {MFJ:96950, Single:48475};   // 0% long-term cap gains up to these AGI levels
+const BRACKETS_DEFAULT = JSON.parse(JSON.stringify(BRACKETS)); // deep-copy for reset
+let STD_DED  = {MFJ:31500, Single:15750};   // 2026 est.
+const STD_DED_DEFAULT = {...STD_DED};
+let LTCG_0   = {MFJ:96950, Single:48475};   // 0% long-term cap gains up to these AGI levels
+const LTCG_0_DEFAULT = {...LTCG_0};
 const LTCG_15  = {MFJ:600050,Single:535000};  // 15% bracket above this = 20%
 // IRMAA Medicare Part B surcharge triggers (MAGI, 2026 est.)
 const IRMAA_TH = {MFJ:[218000,274000,345000,426000], Single:[109000,137000,173000,213000]};
@@ -2010,6 +2117,26 @@ function renderTable(accumRows, retireRows, inp){
 
 function toggleTbl(){ $('tbl-wrap').classList.toggle('hidden'); }
 
+function exportTableToCSV(){
+  const table = document.querySelector('#tbl-wrap table');
+  if(!table) return;
+  const rows = Array.from(table.querySelectorAll('tr'));
+  const csvLines = rows.map(tr =>
+    Array.from(tr.querySelectorAll('th,td')).map(cell => {
+      const val = cell.textContent.replace(/[\r\n]+/g,' ').trim();
+      return '"' + val.replace(/"/g,'""') + '"';
+    }).join(',')
+  );
+  const csv = csvLines.join('\r\n');
+  const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'retirement_projection.csv';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 // ═══════════════════════════════════════════════════
 //  APPLY CONFIG FROM PYTHON
 // ═══════════════════════════════════════════════════
@@ -2058,12 +2185,83 @@ function applyConfig(c){
   if($('nqdcDistType')) $('nqdcDistType').value=c.nqdcDistType||'10yr';
   sv('nqdcStartAge',c.nqdcStartAge);
   toggleNqdc();
+  // Load tax brackets from config if provided
+  if(c.tax_brackets){
+    const tb=c.tax_brackets;
+    if(tb.mfj)    BRACKETS.MFJ    = tb.mfj;
+    if(tb.single) BRACKETS.Single = tb.single;
+    if(tb.std_ded_mfj)    STD_DED.MFJ    = tb.std_ded_mfj;
+    if(tb.std_ded_single) STD_DED.Single = tb.std_ded_single;
+    if(tb.ltcg_0_mfj)    LTCG_0.MFJ    = tb.ltcg_0_mfj;
+    if(tb.ltcg_0_single) LTCG_0.Single = tb.ltcg_0_single;
+  }
+  populateBracketTable();
   // Trigger UI
   toggleSpouse(); updateSS(); updateSWR(); updAlloc(); updateIncomeHint();
   // Highlight matching preset
   const s=c.stockAlloc;
   const map={30:'Conservative 30/70',60:'Moderate 60/40',80:'Growth 80/20',100:'All-Stocks'};
   if(map[s]) document.querySelectorAll('.pb').forEach(b=>{if(b.textContent.trim()===map[s])b.classList.add('active');});
+}
+
+// ═══════════════════════════════════════════════════
+//  BRACKET EDITOR
+// ═══════════════════════════════════════════════════
+function populateBracketTable(){
+  const tbody=$('bracket-edit-body');
+  if(!tbody)return;
+  tbody.innerHTML='';
+  const mfj=BRACKETS.MFJ, single=BRACKETS.Single;
+  const n=Math.max(mfj.length,single.length);
+  for(let i=0;i<n;i++){
+    const bm=mfj[i]||{r:0,to:0};
+    const bs=single[i]||{r:0,to:0};
+    const ratePct=Math.round(bm.r*100);
+    const mfjTo=bm.to>=1e8?'':bm.to;
+    const singTo=bs.to>=1e8?'':bs.to;
+    const tr=document.createElement('tr');
+    tr.style.borderBottom='1px solid var(--bd)';
+    tr.innerHTML=`
+      <td style="padding:.35rem .6rem;font-weight:600;color:var(--p);font-size:.88rem;">${ratePct}%</td>
+      <td style="padding:.35rem .4rem;"><input type="number" id="br-mfj-${i}" value="${mfjTo}" min="0"
+        placeholder="no limit" style="width:100%;max-width:160px;font-size:.85rem;"></td>
+      <td style="padding:.35rem .4rem;"><input type="number" id="br-sin-${i}" value="${singTo}" min="0"
+        placeholder="no limit" style="width:100%;max-width:160px;font-size:.85rem;"></td>`;
+    tbody.appendChild(tr);
+  }
+  // Standard deduction + LTCG
+  if($('std-ded-mfj'))    $('std-ded-mfj').value    = STD_DED.MFJ;
+  if($('std-ded-single')) $('std-ded-single').value  = STD_DED.Single;
+  if($('ltcg-0-mfj'))     $('ltcg-0-mfj').value     = LTCG_0.MFJ;
+}
+
+function applyEditedBrackets(){
+  const tbody=$('bracket-edit-body');
+  if(!tbody)return;
+  const rows=tbody.querySelectorAll('tr');
+  const newMFJ=[], newSingle=[];
+  rows.forEach((tr,i)=>{
+    const rm=BRACKETS.MFJ[i]||BRACKETS.Single[i];
+    const rate=rm?rm.r:0;
+    const mfjVal=parseFloat($('br-mfj-'+i)?.value)||1e9;
+    const sinVal=parseFloat($('br-sin-'+i)?.value)||1e9;
+    newMFJ.push({r:rate,to:mfjVal});
+    newSingle.push({r:rate,to:sinVal});
+  });
+  BRACKETS.MFJ    = newMFJ;
+  BRACKETS.Single = newSingle;
+  STD_DED.MFJ    = parseFloat($('std-ded-mfj')?.value)    || STD_DED.MFJ;
+  STD_DED.Single = parseFloat($('std-ded-single')?.value) || STD_DED.Single;
+  LTCG_0.MFJ     = parseFloat($('ltcg-0-mfj')?.value)    || LTCG_0.MFJ;
+  calculate();
+}
+
+function resetBracketsToDefault(){
+  BRACKETS = JSON.parse(JSON.stringify(BRACKETS_DEFAULT));
+  STD_DED  = {...STD_DED_DEFAULT};
+  LTCG_0   = {...LTCG_0_DEFAULT};
+  populateBracketTable();
+  calculate();
 }
 
 // ═══════════════════════════════════════════════════
@@ -2079,7 +2277,7 @@ window.onload = function(){
       calculate(); // Auto-calculate on load
     } catch(e){ console.warn('Config parse error:',e); }
   } else {
-    toggleSpouse(); updateSS(); updateSWR(); updAlloc();
+    populateBracketTable(); toggleSpouse(); updateSS(); updateSWR(); updAlloc();
   }
   // Live birthday → age hint updates
   ['bday1','bday2'].forEach(id=>{
@@ -2097,7 +2295,7 @@ window.onload = function(){
    'goalType','customGoalYears','annualSpending'].forEach(id=>{
     const el=$(id); if(el) el.addEventListener('input',updateSWR);
   });
-  // Initialize tax bracket tab with default values
+  // Initialize tax bracket projector
   renderTaxBracketTab();
 };
 

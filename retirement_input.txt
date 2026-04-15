@@ -161,3 +161,38 @@ dqnc_dist_type           = 10yr
 
 # Age at which SERPLUS distributions begin (typically = retirement age)
 dqnc_dist_start_age      = 65
+
+
+# ================================================================
+[tax_brackets]
+# ================================================================
+# 2026 Federal Income Tax Brackets.
+# Format: rate_percent | upper_limit_dollars
+# Use 999999999 for the top (unlimited) bracket.
+# Edit to model future law changes or test scenarios.
+
+mfj_brackets =
+    10 | 24800
+    12 | 100800
+    22 | 211400
+    24 | 403550
+    32 | 512450
+    35 | 768700
+    37 | 999999999
+
+single_brackets =
+    10 | 12400
+    12 | 50400
+    22 | 105700
+    24 | 201775
+    32 | 256225
+    35 | 640600
+    37 | 999999999
+
+# Standard deduction (2026 est.)
+std_ded_mfj    = 31500
+std_ded_single = 15750
+
+# Long-term capital gains 0% threshold (0% bracket ceiling)
+ltcg_0_mfj    = 96950
+ltcg_0_single = 48475
