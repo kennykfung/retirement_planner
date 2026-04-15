@@ -714,7 +714,7 @@ tr.hl td{background:#f0fdfa;}
   </div>
   <div class="nav-btns">
     <button class="nb" onclick="sw('accounts')">← Accounts</button>
-    <button class="nb pri" onclick="calculate(); location.reload();">⚡ Calculate My Plan</button>
+    <button class="nb pri" onclick="calculate();">⚡ Calculate My Plan</button>
   </div>
 </div>
 
