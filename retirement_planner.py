@@ -374,7 +374,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <style>
 :root{--p:#0d9488;--pd:#0f766e;--pl:#ccfbf1;--acc:#f59e0b;--dan:#ef4444;--ok:#22c55e;--tx:#1f2937;--tl:#6b7280;--bd:#e5e7eb;--bg:#f9fafb;}
 *{box-sizing:border-box;margin:0;padding:0;}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--bg);color:var(--tx);min-height:100vh;}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#d1d5db;color:var(--tx);min-height:100vh;}
+.page-wrap{max-width:1440px;margin:0 auto;background:var(--bg);box-shadow:0 0 40px rgba(0,0,0,.15);min-height:100vh;}
 /* ── Header ── */
 .header{background:linear-gradient(135deg,#134e4a,var(--p));color:#fff;padding:1.6rem 2rem;text-align:center;}
 .header h1{font-size:1.9rem;font-weight:700;margin-bottom:.3rem;}
@@ -386,10 +387,10 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 .tab-btn:hover{color:var(--p);}
 .tab-btn.active{color:var(--p);border-bottom-color:var(--p);font-weight:600;}
 /* ── Content ── */
-.content{max-width:1400px;margin:0 auto;padding:1.6rem 1.5rem;}
+.content{padding:1.6rem 2rem;}
 .tab-panel{display:none;}.tab-panel.active{display:block;}
 /* ── Two-column inputs layout ── */
-.two-col{display:grid;grid-template-columns:1fr 1fr;gap:1.5rem;align-items:start;}
+.two-col{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:1.5rem;align-items:start;}
 @media(max-width:960px){.two-col{grid-template-columns:1fr;}}
 .section-label{font-size:1rem;font-weight:700;color:var(--pd);margin:1.2rem 0 .6rem;padding:.45rem .8rem;background:var(--pl);border-radius:8px;border-left:4px solid var(--p);}
 /* ── Card ── */
@@ -480,6 +481,7 @@ tr.hl td{background:#f0fdfa;}
 </style>
 </head>
 <body>
+<div class="page-wrap">
 
 <div class="header">
   <h1>🌿 Retirement Planner</h1>
@@ -2437,6 +2439,7 @@ function renderTaxBracketTab(){
   if(typeof calculate === 'function') calculate();
 }
 </script>
+</div><!-- .page-wrap -->
 </body>
 </html>"""
 
