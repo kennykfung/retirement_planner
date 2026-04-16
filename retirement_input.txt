@@ -136,6 +136,7 @@ inflation_rate_pct          = 3.0
 
 # Tax filing status — affects bracket thresholds and standard deduction
 filing_status               = MFJ    # MFJ (Married Filing Jointly) or Single
+retirement_state            = CA     # State abbreviation (CA, NY, FL, TX, OR, MN, CO, PA, AZ, NV, WA, OTHER)
 
 # Model Roth conversion during low-income years before SS/RMDs kick in?
 roth_conversion_strategy    = true   # true or false

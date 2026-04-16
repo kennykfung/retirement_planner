@@ -60,6 +60,7 @@
   "bondReturn": 4.0,
   "inflationRate": 3.0,
   "filingStatus": "MFJ",
+  "retirementState": "CA",
   "rothConversion": true,
   "hasNqdc": false,
   "nqdcBalance": 0.0,
@@ -250,7 +251,7 @@ tr.hl td{background:#f0fdfa;}
 <div class="header">
   <h1>🌿 Retirement Planner</h1>
   <p>Social Security optimization · Tax-efficient withdrawal sequencing · RMD management</p>
-  <div class="gen-banner">Generated from <strong>retirement_input.txt</strong> on 2026-04-14 20:31</div>
+  <div class="gen-banner">Generated from <strong>retirement_input.txt</strong> on 2026-04-15 17:45</div>
 </div>
 
 <div class="tab-nav">
@@ -550,6 +551,26 @@ tr.hl td{background:#f0fdfa;}
             </select>
             <span class="hint">Determines tax brackets and standard deduction.</span>
           </div>
+          <div class="fm"><label>Retirement State</label>
+            <select id="retirementState">
+              <option value="CA">California (CA)</option>
+              <option value="NY">New York (NY)</option>
+              <option value="OR">Oregon (OR)</option>
+              <option value="MN">Minnesota (MN)</option>
+              <option value="CO">Colorado (CO) — Flat 4.4%</option>
+              <option value="PA">Pennsylvania (PA) — Flat 3.07%</option>
+              <option value="AZ">Arizona (AZ) — Flat 2.5%</option>
+              <option value="FL">Florida (FL) — No Income Tax</option>
+              <option value="TX">Texas (TX) — No Income Tax</option>
+              <option value="NV">Nevada (NV) — No Income Tax</option>
+              <option value="WA">Washington (WA) — No Income Tax</option>
+              <option value="SD">South Dakota (SD) — No Income Tax</option>
+              <option value="WY">Wyoming (WY) — No Income Tax</option>
+              <option value="AK">Alaska (AK) — No Income Tax</option>
+              <option value="OTHER">Other (No State Tax Applied)</option>
+            </select>
+            <span class="hint">State income tax applied to retirement withdrawals.</span>
+          </div>
         </div>
         <div class="trow" style="margin-top:.7rem;">
           <input type="checkbox" id="rothConversion">
@@ -702,7 +723,7 @@ tr.hl td{background:#f0fdfa;}
           <table><thead><tr>
             <th>Year</th><th>Age</th><th>SS Income</th><th>NQDC</th><th>Other Inc.</th>
             <th>Portfolio Draw</th><th>From Trad.</th><th>From Roth</th><th>RMD</th>
-            <th>Tax Bracket</th><th>IRMAA</th><th>End Balance</th>
+            <th>Tax Bracket</th><th>Fed. Tax</th><th>State Tax</th><th>IRMAA</th><th>End Balance</th>
           </tr></thead><tbody id="tbl-body"></tbody></table>
         </div>
       </div>
@@ -744,13 +765,56 @@ const CPI_BASE_YEAR = 2026;
 let CPI_RATE = 0.03; // 3.0% per year — user-adjustable via Tax Brackets tab
 const HCARE_RATE = 0.04; // healthcare inflation used for HSA adjustments
 
-// Approximate California state brackets (baseline thresholds — simple progressive model)
-// Note: simplified for offline modeling; can be refined later.
-const STATE_BRACKETS_CA = {
-  Single: [{r:0.01,to:10000},{r:0.02,to:25000},{r:0.04,to:50000},{r:0.06,to:100000},{r:0.08,to:250000},{r:0.093,to:350000},{r:0.103,to:500000},{r:0.113,to:1000000},{r:0.123,to:1e9}],
-  MFJ:    [{r:0.01,to:20000},{r:0.02,to:50000},{r:0.04,to:100000},{r:0.06,to:200000},{r:0.08,to:500000},{r:0.093,to:700000},{r:0.103,to:1000000},{r:0.113,to:2000000},{r:0.123,to:1e9}]
+// ── State Income Tax Data — 2026 baseline thresholds ──
+// Each entry: { brackets:{MFJ:[],Single:[]}, stdDed:{MFJ,Single}, taxesSS:bool, flatRate:number|null, noTax:bool }
+const STATE_TAX_DATA = {
+  CA: {
+    taxesSS: false,
+    stdDed: {MFJ:9808, Single:4904},
+    brackets: {
+      Single: [{r:0.01,to:10412},{r:0.02,to:24684},{r:0.04,to:38959},{r:0.06,to:54081},{r:0.08,to:68350},{r:0.093,to:349137},{r:0.103,to:418961},{r:0.113,to:698271},{r:0.123,to:1e9}],
+      MFJ:    [{r:0.01,to:20824},{r:0.02,to:49368},{r:0.04,to:77918},{r:0.06,to:108162},{r:0.08,to:136700},{r:0.093,to:698274},{r:0.103,to:837922},{r:0.113,to:1000000},{r:0.123,to:1e9}]
+    }
+  },
+  NY: {
+    taxesSS: false,
+    stdDed: {MFJ:16050, Single:8000},
+    brackets: {
+      Single: [{r:0.04,to:17150},{r:0.045,to:23600},{r:0.0525,to:27900},{r:0.0585,to:161550},{r:0.0625,to:323200},{r:0.0685,to:2155350},{r:0.0965,to:5000000},{r:0.103,to:25000000},{r:0.109,to:1e9}],
+      MFJ:    [{r:0.04,to:17150},{r:0.045,to:23600},{r:0.0525,to:27900},{r:0.0585,to:323200},{r:0.0625,to:2155350},{r:0.0685,to:5000000},{r:0.0965,to:25000000},{r:0.103,to:1e9}]
+    }
+  },
+  OR: {
+    taxesSS: false,
+    stdDed: {MFJ:4865, Single:2420},
+    brackets: {
+      Single: [{r:0.0475,to:4050},{r:0.0675,to:10200},{r:0.0875,to:125000},{r:0.099,to:1e9}],
+      MFJ:    [{r:0.0475,to:8100},{r:0.0675,to:20400},{r:0.0875,to:250000},{r:0.099,to:1e9}]
+    }
+  },
+  MN: {
+    taxesSS: true,
+    stdDed: {MFJ:29150, Single:14575},
+    brackets: {
+      Single: [{r:0.0535,to:31690},{r:0.068,to:104090},{r:0.0785,to:193240},{r:0.0985,to:1e9}],
+      MFJ:    [{r:0.0535,to:46330},{r:0.068,to:184040},{r:0.0785,to:321450},{r:0.0985,to:1e9}]
+    }
+  },
+  CO:    { taxesSS: false, flatRate: 0.044,  stdDed: {MFJ:0,Single:0}, brackets: {} },
+  PA:    { taxesSS: false, flatRate: 0.0307, stdDed: {MFJ:0,Single:0}, brackets: {} },
+  AZ:    { taxesSS: false, flatRate: 0.025,  stdDed: {MFJ:0,Single:0}, brackets: {} },
+  FL:    { noTax: true },
+  TX:    { noTax: true },
+  NV:    { noTax: true },
+  WA:    { noTax: true },
+  SD:    { noTax: true },
+  WY:    { noTax: true },
+  AK:    { noTax: true },
+  OTHER: { noTax: true }
 };
-const STD_DED_CA = {MFJ:9808, Single:4904};
+
+// Active retirement state — initialized from config; overridable via dropdown
+let RETIREMENT_STATE = 'CA';
 
 /** Compute marginal, effective tax, and bracket room using adjusted brackets/std deduction */
 function computeTaxVars(agi, filing, multiplier=1){
@@ -767,12 +831,14 @@ function computeTaxVars(agi, filing, multiplier=1){
   return {margRate:marg, tax:Math.max(0,Math.round(tax)), effRate:eff, room:Math.round(room), stdDeduction:std};
 }
 
-/** Compute a simple CA state tax (standard deduction only) */
-function computeStateTaxCA(agi, filing, multiplier=1){
-  const std = Math.round((STD_DED_CA[filing]||STD_DED_CA.MFJ) * multiplier);
-  const bs = (STATE_BRACKETS_CA[filing]||STATE_BRACKETS_CA.MFJ).map(b=>({r:b.r,to:Math.round(b.to*multiplier)}));
-  // CA does not tax Social Security — caller should pass AGI excluding SS if needed
-  const taxable = Math.max(0, agi - std);
+/** Compute state income tax for the given AGI, filing status, and inflation multiplier */
+function computeStateTax(agi, filing, multiplier=1, state=RETIREMENT_STATE){
+  const sd = STATE_TAX_DATA[state] || STATE_TAX_DATA.OTHER;
+  if(sd.noTax) return 0;
+  const deduction = Math.round(((sd.stdDed||{})[filing] || (sd.stdDed||{}).MFJ || 0) * multiplier);
+  const taxable = Math.max(0, agi - deduction);
+  if(sd.flatRate) return Math.max(0, Math.round(taxable * sd.flatRate));
+  const bs = ((sd.brackets||{})[filing] || (sd.brackets||{}).MFJ || []).map(b=>({r:b.r,to:Math.round(b.to*multiplier)}));
   let tax=0, prev=0;
   for(const b of bs){
     if(taxable <= b.to){ tax += (taxable - prev) * b.r; break; }
@@ -804,7 +870,7 @@ function taxableSSAmt(ssInc, otherIncome, filing) {
  * Returns {amount, choice} where choice is '12%', '22%', or '24%'. */
 function evalConversionOptions(provAGI, tradBal, filing, multiplier=1){
   const currentFed = computeTaxVars(provAGI, filing, multiplier).tax;
-  const currentState = computeStateTaxCA(Math.max(0, provAGI), filing, multiplier);
+  const currentState = computeStateTax(Math.max(0, provAGI), filing, multiplier);
   const currentTotal = currentFed + currentState;
   const targets = [0.12, 0.22, 0.24];
   let best = {amount:0, choice:null, incTax:Infinity, options:[]};
@@ -819,7 +885,7 @@ function evalConversionOptions(provAGI, tradBal, filing, multiplier=1){
     const convAmt = Math.min(tradBal, Math.floor(needed*0.99));
     if(convAmt<=0){ best.options.push({rate:t,amount:0,incTax:0}); continue; }
     const newFed = computeTaxVars(provAGI+convAmt, filing, multiplier).tax;
-    const newState = computeStateTaxCA(Math.max(0, provAGI+convAmt), filing, multiplier);
+    const newState = computeStateTax(Math.max(0, provAGI+convAmt), filing, multiplier);
     const incTax = (newFed + newState) - currentTotal;
     best.options.push({rate:t,amount:convAmt,incTax});
     if(incTax < best.incTax){ best = {amount:convAmt, choice:Math.round(t*100)+'%', incTax, options:best.options}; }
@@ -1268,9 +1334,10 @@ function project(inp){
     // IRMAA uses MAGI from Year-2 (if available), otherwise fallback to current AGI
     const magiForIrmaa = (magiHistory.length >= 2) ? magiHistory[magiHistory.length-2] : agi;
     const irmaaAdj = (()=>{ const th=(IRMAA_TH[filingStatus]||IRMAA_TH.MFJ); for(let i=th.length-1;i>=0;i--){ if(magiForIrmaa>Math.round(th[i]*mult)) return i+1; } return 0; })();
-    // State tax (CA) — CA does not tax Social Security, so remove SS from state AGI
-    const stateTaxableAGI = agi - _tssAmt;
-    const stateTax = computeStateTaxCA(stateTaxableAGI, filingStatus||'MFJ', mult);
+    // State tax — some states don't tax Social Security; exclude SS from state AGI for those states
+    const _stateData = STATE_TAX_DATA[RETIREMENT_STATE] || STATE_TAX_DATA.OTHER;
+    const stateTaxableAGI = _stateData.taxesSS ? agi : agi - _tssAmt;
+    const stateTax = computeStateTax(stateTaxableAGI, filingStatus||'MFJ', mult);
     const ltcgRate = agi<(LTCG_0[filingStatus||'MFJ']||96700)?0:agi<(LTCG_15[filingStatus||'MFJ']||583750)?0.15:0.20;
     // --- Validation checks (NaN, negatives, tax integrity) ---
     const warnings = [];
@@ -1312,6 +1379,7 @@ function calculate(){
   const a1=calcAge($('bday1').value)||60;
   const a2=hs?(calcAge($('bday2').value)||58):a1;
   const filing=$('filingStatus')?.value||'MFJ';
+  RETIREMENT_STATE = $('retirementState')?.value || RETIREMENT_STATE;
   const inp={
     name1:$('name1').value||'You', name2:$('name2').value||'Spouse',
     age1:a1, retAge1:int('retAge1')||65, lifeExp1:int('lifeExp1')||90,
@@ -1334,6 +1402,7 @@ function calculate(){
     stockReturn:num('stockReturn')||7, bondReturn:num('bondReturn')||4,
     stockAlloc:int('stockPct')||60, inflationRate:num('inflationRate')||3,
     filingStatus:filing,
+    retirementState:RETIREMENT_STATE,
     rothConversion:$('rothConversion').checked,
     goalYears:getGoalYrs(), swr:getSWR(),
     // Current income
@@ -1845,13 +1914,13 @@ function renderTable(accumRows, retireRows, inp){
       const phaseCell=accumRows.length>0?`<td style="color:#047857;font-weight:600;font-size:.75rem;">ACCUM</td>`:'';
       tr.innerHTML=`${phaseCell}<td>${r.year}</td><td>${age}</td>
         <td>—</td><td>—</td><td>Contrib: ${fmtK(r.contrib||0)}</td>
-        <td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td>
+        <td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td>
         <td><strong>${fmtK(r.tot)}</strong></td>`;
       tbody.appendChild(tr);
     });
     // Separator row
     const sep=document.createElement('tr');
-    const colCount=accumRows.length>0?13:12;
+    const colCount=accumRows.length>0?15:14;
     sep.innerHTML=`<td colspan="${colCount}" style="background:#064e3b;color:#a7f3d0;font-size:.75rem;font-weight:700;text-align:center;padding:.4rem;">▼ RETIREMENT STARTS — Age ${inp.retAge1} ▼</td>`;
     tbody.appendChild(sep);
   }
@@ -1870,11 +1939,14 @@ function renderTable(accumRows, retireRows, inp){
     const phaseCell=accumRows.length>0?`<td style="color:#6b7280;font-size:.75rem;">RETIRE</td>`:'';
     const rothConvCell=r.rothConv>0?`<span style="color:#7c3aed;font-size:.72rem;">+${fmtKD(r.rothConv,r.year)} conv</span>`:'';
     const convChoiceCell=r.convChoice?` <div style="font-size:.72rem;color:#7c3aed;">(${r.convChoice})</div>`:'';
+    const stateTaxCell = r.stateTax>0 ? `<span style="color:#7c3aed;">${fmtD(r.stateTax,r.year)}</span>` : '—';
     tr.innerHTML=`${phaseCell}<td>${r.year}</td><td>${age}</td><td>${fmtD(r.ssInc,r.year)}</td>
       <td>${r.nqdcInc>0?`<strong style="color:#4f46e5;">${fmtD(r.nqdcInc,r.year)}</strong>`:'—'}</td>
       <td>${fmtD(r.penInc+r.othInc,r.year)}</td><td>${fmtD(r.actual,r.year)}</td><td>${fmtD(r.fTrad,r.year)}${rothConvCell}</td>
       <td>${fmtD(r.fRoth,r.year)}${convChoiceCell}</td><td>${r.rmd>0?fmtD(r.rmd,r.year):'—'}</td>
       <td><strong style="color:${bracketColor};">${(r.margRate*100).toFixed(0)}%</strong></td>
+      <td>${fmtD(r.federalTax,r.year)}</td>
+      <td>${stateTaxCell}</td>
       <td>${irmaaCell}</td>
       <td><strong>${fmtKD(r.tot,r.year)}</strong></td>`;
     tbody.appendChild(tr);
@@ -1943,6 +2015,7 @@ function applyConfig(c){
   sv('stockPct',c.stockAlloc); sv('stockReturn',c.stockReturn);
   sv('bondReturn',c.bondReturn); sv('inflationRate',c.inflationRate);
   if($('filingStatus')) $('filingStatus').value=c.filingStatus||'MFJ';
+  if($('retirementState') && c.retirementState){ $('retirementState').value=c.retirementState; RETIREMENT_STATE=c.retirementState; }
   sc('rothConversion',c.rothConversion);
   // NQDC
   sc('hasNqdc',c.hasNqdc);
