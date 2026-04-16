@@ -1480,7 +1480,14 @@ function project(inp){
       nqdcYrsPaid++;
     }
     const extInc   = ssInc+penInc+othInc+nqdcInc;
-    const portNeed = Math.max(0, spending-extInc);
+    // IRMAA surcharge — based on MAGI from 2 years prior (only once 2 years of history exist)
+    // Computed here (before portNeed) because it uses only historical data, not current-year AGI
+    const magiForIrmaa = magiHistory.length >= 2 ? magiHistory[magiHistory.length-2] : 0;
+    const irmaaAdj = (()=>{ const th=(IRMAA_TH[filingStatus]||IRMAA_TH.MFJ); for(let i=th.length-1;i>=0;i--){ if(magiForIrmaa>Math.round(th[i]*mult)) return i+1; } return 0; })();
+    // Count Medicare-eligible spouses (must be ≥65); surcharge is per person per year
+    const medicarePersons = (a1>=65?1:0) + (hasSpouse&&a2!==null&&a2>=65?1:0);
+    const irmaaSurcharge = Math.round((IRMAA_SURCHARGE[irmaaAdj]||0) * Math.max(medicarePersons,0) * mult);
+    const portNeed = Math.max(0, spending - extInc + irmaaSurcharge);
     // Withdrawals — strict hierarchy: RMD -> Taxable -> Traditional (fill bracket room) -> HSA -> Cash -> Roth
     const rmd1 = getRmd(tb1, a1);
     const rmd2 = (hasSpouse && a2 !== null) ? getRmd(tb2, a2) : 0;
@@ -1560,21 +1567,37 @@ function project(inp){
     // xbBasis unchanged by growth (investment returns increase the unrealized gain, not basis)
     hb = Math.max(0, hb - fHSA) * (1 + pr * 0.8);
     cb = Math.max(0, cb - fCash) * (1 + Math.min(inf * 0.9, 0.04));
-    const tot = tb + rb + xb + cb + hb;
+    // tot is computed AFTER tax payment below — do not compute here
     // Final AGI (Pass 2) — taxable brokerage: only the gain portion (xbGainFrac) is taxable at LTCG rates
     const _otherAGI = nqdcInc + penInc + othInc + fTrad + (fTax * xbGainFrac) + fHSA + rothConv;
     const _tssAmt   = taxableSSAmt(ssInc, _otherAGI, filingStatus||'MFJ');
     const agi = _tssAmt + _otherAGI;
     // Federal tax computed using CPI-indexed brackets
     const fed = computeTaxVars(agi, filingStatus||'MFJ', mult);
-    // IRMAA uses MAGI from Year-2 (if available), otherwise fallback to current AGI
-    const magiForIrmaa = (magiHistory.length >= 2) ? magiHistory[magiHistory.length-2] : agi;
-    const irmaaAdj = (()=>{ const th=(IRMAA_TH[filingStatus]||IRMAA_TH.MFJ); for(let i=th.length-1;i>=0;i--){ if(magiForIrmaa>Math.round(th[i]*mult)) return i+1; } return 0; })();
     // State tax — some states don't tax Social Security; exclude SS from state AGI for those states
     const _stateData = STATE_TAX_DATA[RETIREMENT_STATE] || STATE_TAX_DATA.OTHER;
     const stateTaxableAGI = _stateData.taxesSS ? agi : agi - _tssAmt;
     const stateTax = computeStateTax(stateTaxableAGI, filingStatus||'MFJ', mult);
     const ltcgRate = agi<(LTCG_0[filingStatus||'MFJ']||96700)?0:agi<(LTCG_15[filingStatus||'MFJ']||583750)?0.15:0.20;
+    // Pay taxes from portfolio — cash first (most liquid), then taxable, then traditional
+    // This reflects that taxes are a real cash expense that must come from somewhere
+    let taxDue = fed.tax + stateTax;
+    const taxFromCash = Math.min(cb, taxDue); cb -= taxFromCash; taxDue -= taxFromCash;
+    if(taxDue > 0 && xb > 0){
+      const taxFromXb = Math.min(xb, taxDue);
+      if(xb > 0) xbBasis = Math.max(0, xbBasis - taxFromXb * (xbBasis / xb));
+      xb -= taxFromXb; taxDue -= taxFromXb;
+    }
+    if(taxDue > 0){
+      const tbNow = tb1 + tb2;
+      const taxFromTrad = Math.min(tbNow, taxDue);
+      if(tbNow > 0){
+        tb1 = Math.max(0, tb1 - taxFromTrad * (tb1 / tbNow));
+        tb2 = Math.max(0, tb2 - taxFromTrad * (tb2 / tbNow));
+        tb = tb1 + tb2;
+      }
+    }
+    const tot = tb + rb + xb + cb + hb;
     // --- Validation checks (NaN, negatives, tax integrity) ---
     const warnings = [];
     const checkNums = {agi, federalTax:fed.tax, stateTax, tot, tb, rb, xb, cb, hb, fTrad, fTax, fRoth, fCash, fHSA, rmd, rothConv};
@@ -1594,7 +1617,7 @@ function project(inp){
       portNeed, fTrad, fTax, fRoth, fCash, fHSA, rothConv,
       actual:fTrad+fTax+fRoth+fCash+fHSA,
       rmd, tb, rb, xb, cb, hb, tot,
-      agi, margRate:fed.margRate, room:fed.room, irmaa:irmaaAdj, ltcgRate,
+      agi, margRate:fed.margRate, room:fed.room, irmaa:irmaaAdj, irmaaSurcharge, ltcgRate,
       federalTax:fed.tax, stateTax, provAGI: (()=>{ const _o=nqdcInc+penInc+othInc+rmd+fHSA; return taxableSSAmt(ssInc,_o,filingStatus||'MFJ')+_o; })(), convChoice: chosenConvLabel||null,
       warnings
     });
