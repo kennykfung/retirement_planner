@@ -1441,10 +1441,19 @@ function project(inp){
   const retCash    = cb;
   const retHSA     = hb;
   const retNqdcBal = nqdcBal;
-  const retireStartBal = retTrad1 + retTrad2 + retRoth + retTaxable + retCash + retHSA;
+  const deterministicRetireStart = retTrad1 + retTrad2 + retRoth + retTaxable + retCash + retHSA;
+
+  // Run accumulation Monte Carlo (10,000 iterations) to get p10/p50 bands
+  const accumMC = accumRows.length > 0 ? runAccumMonteCarlo(inp, accumRows) : null;
+  // Use median (p50) as the retirement starting balance for the distribution phase
+  const retireStartBal = (accumMC && accumMC.finalP50) ? accumMC.finalP50 : deterministicRetireStart;
+  // Scale each bucket proportionally to the median outcome
+  const accumScaleFactor = deterministicRetireStart > 0 ? retireStartBal / deterministicRetireStart : 1;
 
   // ── PHASE 2: DISTRIBUTION ─────────────────────────────────
-  tb1 = retTrad1; tb2 = retTrad2; tb = tb1 + tb2; rb=retRoth; xb=retTaxable; cb=retCash; hb=retHSA;
+  tb1 = retTrad1 * accumScaleFactor; tb2 = retTrad2 * accumScaleFactor; tb = tb1 + tb2;
+  rb = retRoth * accumScaleFactor; xb = retTaxable * accumScaleFactor;
+  cb = retCash * accumScaleFactor; hb = retHSA * accumScaleFactor;
   // xbBasis carries over from accumulation phase (cost basis of taxable brokerage)
   nqdcBal=retNqdcBal;
   const magiHistory = [];
@@ -1627,7 +1636,7 @@ function project(inp){
     if(a1>lifeExp1 && (!hasSpouse||a2===null||a2>lifeExp2)) break;
   }
 
-  return { accumRows, retireRows, retireStartBal, yearsToRetire };
+  return { accumRows, retireRows, retireStartBal, deterministicRetireStart, yearsToRetire, accumMC };
 }
 
 // ═══════════════════════════════════════════════════
@@ -1696,7 +1705,7 @@ let aChart = null;
 function renderResults(projResult, inp){
   $('res-placeholder').classList.add('hidden');
   $('res-content').classList.remove('hidden');
-  const { accumRows, retireRows: proj, retireStartBal, yearsToRetire } = projResult;
+  const { accumRows, retireRows: proj, retireStartBal, deterministicRetireStart, yearsToRetire, accumMC } = projResult;
   const total = retireStartBal;
   const currentTotal = (inp.trad0||0)+(inp.roth0||0)+(inp.taxable0||0)+(inp.cash0||0)+(inp.hsa0||0);
   const debt=num('mortgage')+num('otherDebt');
@@ -1710,8 +1719,11 @@ function renderResults(projResult, inp){
   if(yearsToRetire>0 && accumRows.length>0){
     const lastAccum = accumRows[accumRows.length-1];
     const totalContribs = accumRows.reduce((s,r)=>s+(r.contrib||0),0);
-    const growth = total - currentTotal - totalContribs;
-    let asum=`<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:.75rem;margin-bottom:.75rem;">
+    const growth = (deterministicRetireStart||total) - currentTotal - totalContribs;
+    const p50bal = accumMC ? accumMC.finalP50 : (deterministicRetireStart||total);
+    const p10bal = accumMC ? accumMC.finalP10 : null;
+    const cols = accumMC ? 'repeat(4,1fr)' : 'repeat(3,1fr)';
+    let asum=`<div style="display:grid;grid-template-columns:${cols};gap:.75rem;margin-bottom:.75rem;">
       <div style="background:#f0fdf4;border-radius:8px;padding:.75rem;text-align:center;border:1px solid #86efac;">
         <div style="font-size:.7rem;color:#166534;text-transform:uppercase;font-weight:600;">Today's Portfolio</div>
         <div style="font-size:1.3rem;font-weight:700;color:#166534;">${fmtK(currentTotal)}</div></div>
@@ -1719,23 +1731,34 @@ function renderResults(projResult, inp){
         <div style="font-size:.7rem;color:#166534;text-transform:uppercase;font-weight:600;">Total Contributions</div>
         <div style="font-size:1.3rem;font-weight:700;color:#166534;">${fmtK(totalContribs)}</div>
         <div style="font-size:.7rem;color:#166534;">over ${yearsToRetire} years</div></div>
-      <div style="background:#f0fdf4;border-radius:8px;padding:.75rem;text-align:center;border:1px solid #86efac;">
-        <div style="font-size:.7rem;color:#166534;text-transform:uppercase;font-weight:600;">At Retirement (${inp.retAge1})</div>
-        <div style="font-size:1.3rem;font-weight:700;color:#047857;">${fmtK(total)}</div>
-        <div style="font-size:.7rem;color:#166534;">+${fmtK(growth)} growth</div></div>
-    </div>`;
+      <div style="background:#dbeafe;border-radius:8px;padding:.75rem;text-align:center;border:1px solid #93c5fd;">
+        <div style="font-size:.7rem;color:#1e40af;text-transform:uppercase;font-weight:600;">p50 Median at ${inp.retAge1} ★</div>
+        <div style="font-size:1.3rem;font-weight:700;color:#1d4ed8;">${fmtK(p50bal)}</div>
+        <div style="font-size:.7rem;color:#1e40af;">used for retirement phase</div></div>`;
+    if(accumMC && p10bal!=null) asum+=`
+      <div style="background:#fee2e2;border-radius:8px;padding:.75rem;text-align:center;border:1px solid #fca5a5;">
+        <div style="font-size:.7rem;color:#991b1b;text-transform:uppercase;font-weight:600;">p10 Pessimistic at ${inp.retAge1}</div>
+        <div style="font-size:1.3rem;font-weight:700;color:#b91c1c;">${fmtK(p10bal)}</div>
+        <div style="font-size:.7rem;color:#991b1b;">10% chance worse than this</div></div>`;
+    asum+=`</div>`;
+    if(accumMC) asum+=`<div style="font-size:.75rem;color:#475569;background:#f8fafc;border-radius:6px;padding:.5rem .75rem;margin-bottom:.5rem;">Monte Carlo accumulation: 10,000 iterations · 12% volatility · seeded for reproducibility. The <strong>p50 median</strong> is used as your retirement starting balance.</div>`;
     $('accum-summary').innerHTML=asum;
     // Accumulation chart
     if(aChart) aChart.destroy();
     const actx=$('accumChart')?.getContext('2d');
     if(actx){
+      const accumDatasets=[
+        {label:'Deterministic',data:accumRows.map(r=>r.tot),borderColor:'#10b981',backgroundColor:'rgba(16,185,129,.10)',fill:true,tension:.3,borderWidth:2,pointRadius:2},
+        {label:'Traditional',data:accumRows.map(r=>r.tb),borderColor:'#f59e0b',borderDash:[4,3],fill:false,tension:.3,borderWidth:1.5,pointRadius:0},
+        {label:'Roth',data:accumRows.map(r=>r.rb),borderColor:'#22c55e',borderDash:[4,3],fill:false,tension:.3,borderWidth:1.5,pointRadius:0}
+      ];
+      if(accumMC){
+        accumDatasets.push({label:'p50 Median',data:accumMC.p50,borderColor:'#3b82f6',backgroundColor:'rgba(59,130,246,.06)',fill:false,tension:.3,borderWidth:2,pointRadius:0});
+        accumDatasets.push({label:'p10 Pessimistic',data:accumMC.p10,borderColor:'#ef4444',backgroundColor:'rgba(239,68,68,.04)',fill:false,tension:.3,borderWidth:1.5,pointRadius:0,borderDash:[5,4]});
+      }
       aChart=new Chart(actx,{type:'line',data:{
         labels:accumRows.map(r=>`${r.year} (${r.age1})`),
-        datasets:[
-          {label:'Total Portfolio',data:accumRows.map(r=>r.tot),borderColor:'#10b981',backgroundColor:'rgba(16,185,129,.12)',fill:true,tension:.3,borderWidth:2.5,pointRadius:2},
-          {label:'Traditional',data:accumRows.map(r=>r.tb),borderColor:'#f59e0b',borderDash:[4,3],fill:false,tension:.3,borderWidth:1.5,pointRadius:0},
-          {label:'Roth',data:accumRows.map(r=>r.rb),borderColor:'#22c55e',borderDash:[4,3],fill:false,tension:.3,borderWidth:1.5,pointRadius:0}
-        ]},options:{responsive:true,maintainAspectRatio:false,
+        datasets:accumDatasets},options:{responsive:true,maintainAspectRatio:false,
           plugins:{legend:{position:'top',labels:{boxWidth:12,font:{size:11}}},
             tooltip:{callbacks:{label:c=>` ${c.dataset.label}: ${fmtK(c.raw)}`}}},
           scales:{y:{ticks:{callback:v=>fmtK(v),font:{size:10}},grid:{color:'#f1f5f9'}},
@@ -1877,7 +1900,12 @@ function renderResults(projResult, inp){
   const yearsToRmd = Math.max(0, 73-(inp.retAge1));
   const yearsToSS  = Math.max(0, inp.ssAge1-inp.retAge1);
   let sh=`<div class="strat"><h3>Your Personalized Strategy</h3>`;
-  if(yearsToRetire>0) sh+=`<div class="si"><span class="ic">⏳</span><p><strong>Accumulation phase (${yearsToRetire} years):</strong> Contributions and growth are projected to grow your portfolio from <strong>${fmtK(currentTotal)}</strong> today to <strong>${fmtK(total)}</strong> at retirement age ${inp.retAge1}.</p></div>`;
+  if(yearsToRetire>0){
+    const accumSummary = accumMC
+      ? `Median (p50): <strong>${fmtK(accumMC.finalP50)}</strong> · Pessimistic (p10): <strong>${fmtK(accumMC.finalP10)}</strong>. Retirement phase uses the median.`
+      : `Projected: <strong>${fmtK(total)}</strong>.`;
+    sh+=`<div class="si"><span class="ic">⏳</span><p><strong>Accumulation phase (${yearsToRetire} years, 10K Monte Carlo):</strong> Portfolio grows from <strong>${fmtK(currentTotal)}</strong> today. ${accumSummary}</p></div>`;
+  }
   if(inp.rothConversion && projTrad>0 && yearsToRmd>3) sh+=`<div class="si"><span class="ic">🔄</span><p><strong>Roth Conversion Window:</strong> ~${Math.min(yearsToRmd,yearsToSS)} years before SS + RMDs compress your bracket. Convert <strong>${fmtK(Math.min(projTrad*.1,30000))}–${fmtK(Math.min(projTrad*.2,60000))}/yr</strong> Traditional→Roth to reduce future taxable RMDs.</p></div>`;
   if(inp.ssAge1<70) sh+=`<div class="si"><span class="ic">🏛️</span><p><strong>SS timing:</strong> Claiming at ${inp.ssAge1}. If you have good health and other income to bridge the gap, delaying to 70 adds ~8%/yr and maximizes lifetime benefits — and survivor protection for spouse.</p></div>`;
   if(projTrad>0) sh+=`<div class="si"><span class="ic">📅</span><p><strong>RMDs start at 73:</strong> Projected ${fmtK(projTrad)} in traditional accounts at retirement — first RMD ≈ <strong>${fmtK(projTrad/26.5)}/yr</strong>. Withdraw strategically to manage future bracket.</p></div>`;
@@ -2014,6 +2042,59 @@ function randNormal(mean=0, sd=1){
   let u=0,v=0; while(u===0) u=Math.random(); while(v===0) v=Math.random();
   const z=Math.sqrt(-2.0*Math.log(u))*Math.cos(2*Math.PI*v);
   return z*sd + mean;
+}
+function mulberry32(seed){
+  return function(){
+    seed |= 0; seed = seed + 0x6D2B79F5 | 0;
+    let t = Math.imul(seed ^ seed >>> 15, 1 | seed);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+function runAccumMonteCarlo(inp, accumRows){
+  const ITER = 10000;
+  const pr   = (inp.stockAlloc/100)*(inp.stockReturn/100) + ((100-inp.stockAlloc)/100)*(inp.bondReturn/100);
+  const sd   = (parseFloat(inp.mcAccumVol)||12) / 100;
+  const years = accumRows.length;
+  if(years === 0) return null;
+  const rng = mulberry32(20260416);
+  function seededNormal(mean, stddev){
+    let u, v;
+    do { u = rng(); } while(u === 0);
+    do { v = rng(); } while(v === 0);
+    return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v)*stddev + mean;
+  }
+  // Collect total portfolio value at end of each year across all iterations
+  const yearEnds = Array.from({length: years}, () => []);
+  for(let it=0; it<ITER; it++){
+    let tb = (inp.trad1||0)+(inp.trad2||0);
+    let rb = inp.roth0||0;
+    let xb = inp.taxable0||0;
+    let cb = inp.cash0||0;
+    let hb = inp.hsa0||0;
+    for(let yr=0; yr<years; yr++){
+      const row = accumRows[yr];
+      const r = seededNormal(pr, sd);
+      const contrib = row.contrib||0;
+      // Scale buckets proportionally using deterministic ratios from this year's row
+      const prevTot = tb+rb+xb+cb+hb;
+      const newTot = (prevTot + contrib) * (1 + r);
+      const base = row.tot || 1;
+      tb = (row.tb/base)*newTot;
+      rb = (row.rb/base)*newTot;
+      xb = (row.xb/base)*newTot;
+      cb = (row.cb/base)*newTot;
+      hb = (row.hb/base)*newTot;
+      yearEnds[yr].push(newTot);
+    }
+  }
+  const p10=[]; const p50=[];
+  for(let yr=0; yr<years; yr++){
+    const sorted = yearEnds[yr].slice().sort((a,b)=>a-b);
+    p10.push(sorted[Math.floor(0.10*(ITER-1))]);
+    p50.push(sorted[Math.floor(0.50*(ITER-1))]);
+  }
+  return { p10, p50, finalP50: p50[p50.length-1], finalP10: p10[p10.length-1] };
 }
 
 function runMonteCarlo(){
