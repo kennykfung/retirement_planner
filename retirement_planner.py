@@ -1103,7 +1103,8 @@ function taxableSSAmt(ssInc, otherIncome, filing) {
 }
 
 /** Evaluate conversion options for common target brackets (12%, 22%, and 24%).
- * Returns {amount, choice} where choice is '12%', '22%', or '24%'. */
+ * Returns {amount, choice} where choice is '12%', '22%', or '24%'.
+ * Caps each option at the next IRMAA threshold to avoid cliff surcharges. */
 function evalConversionOptions(provAGI, tradBal, filing, multiplier=1){
   const currentFed = computeTaxVars(provAGI, filing, multiplier).tax;
   const currentState = computeStateTax(Math.max(0, provAGI), filing, multiplier);
@@ -1112,13 +1113,19 @@ function evalConversionOptions(provAGI, tradBal, filing, multiplier=1){
   let best = {amount:0, choice:null, incTax:Infinity, options:[]};
   const std = Math.round((STD_DED[filing]||STD_DED.MFJ) * multiplier);
   const bs = (BRACKETS[filing]||BRACKETS.MFJ).map(b=>({r:b.r,to:Math.round(b.to*multiplier)}));
+  // Find the next IRMAA cliff above current MAGI (provAGI ≈ MAGI before conversion)
+  const irmaaThs = (IRMAA_TH[filing]||IRMAA_TH.MFJ).map(t=>Math.round(t*multiplier));
+  const nextIrmaaCliff = irmaaThs.find(th => th > provAGI) ?? Infinity;
+  // How much headroom exists before the next IRMAA cliff; keep $500 buffer
+  const irmaaHeadroom = Math.max(0, nextIrmaaCliff - provAGI - 500);
   for(const t of targets){
     // find bracket threshold 'to' for this rate
     let thresh = bs.find(b=>Math.abs(b.r - t) < 1e-9)?.to;
     if(thresh===undefined) { thresh = bs[bs.length-1].to; }
     // AGI needed to reach top of that bracket
     const needed = Math.max(0, thresh + std - provAGI);
-    const convAmt = Math.min(tradBal, Math.floor(needed*0.99));
+    // Cap conversion at both bracket room and IRMAA cliff
+    const convAmt = Math.min(tradBal, Math.floor(needed*0.99), Math.floor(irmaaHeadroom));
     if(convAmt<=0){ best.options.push({rate:t,amount:0,incTax:0}); continue; }
     const newFed = computeTaxVars(provAGI+convAmt, filing, multiplier).tax;
     const newState = computeStateTax(Math.max(0, provAGI+convAmt), filing, multiplier);
@@ -1469,6 +1476,9 @@ function project(inp){
     const mult = Math.pow(1 + CPI_RATE, Math.max(0, year - CPI_BASE_YEAR));
     const a1 = retAge1 + yr;
     const a2 = hasSpouse ? (age2 + (retAge1 - age1) + yr) : null;
+    // Switch to Single filing status after one spouse reaches their life expectancy
+    const spouseDied = hasSpouse && a2 !== null && (a1 > lifeExp1 || a2 > lifeExp2);
+    const effectiveFilingStatus = (spouseDied && (filingStatus||'MFJ') === 'MFJ') ? 'Single' : (filingStatus||'MFJ');
     if(spendingReduceAge&&reducedSpending&&a1>=spendingReduceAge)
       spending = Math.min(spending, reducedSpending*Math.pow(1+inf, yearsToRetire+yr));
     const cola = Math.pow(1.025, yearsToRetire + yr);
@@ -1492,7 +1502,7 @@ function project(inp){
     // IRMAA surcharge — based on MAGI from 2 years prior (only once 2 years of history exist)
     // Computed here (before portNeed) because it uses only historical data, not current-year AGI
     const magiForIrmaa = magiHistory.length >= 2 ? magiHistory[magiHistory.length-2] : 0;
-    const irmaaAdj = (()=>{ const th=(IRMAA_TH[filingStatus]||IRMAA_TH.MFJ); for(let i=th.length-1;i>=0;i--){ if(magiForIrmaa>Math.round(th[i]*mult)) return i+1; } return 0; })();
+    const irmaaAdj = (()=>{ const th=(IRMAA_TH[effectiveFilingStatus]||IRMAA_TH.MFJ); for(let i=th.length-1;i>=0;i--){ if(magiForIrmaa>Math.round(th[i]*mult)) return i+1; } return 0; })();
     // Count Medicare-eligible spouses (must be ≥65); surcharge is per person per year
     const medicarePersons = (a1>=65?1:0) + (hasSpouse&&a2!==null&&a2>=65?1:0);
     const irmaaSurcharge = Math.round((IRMAA_SURCHARGE[irmaaAdj]||0) * Math.max(medicarePersons,0) * mult);
@@ -1517,10 +1527,10 @@ function project(inp){
     let extraTrad1 = 0, extraTrad2 = 0;
     if(need > 0){
       const _otherPT = nqdcInc + penInc + othInc + rmd + (fTax * xbGainFrac);
-      const provAGI_beforeTrad = taxableSSAmt(ssInc, _otherPT, filingStatus||'MFJ') + _otherPT;
-      const prov = computeTaxVars(provAGI_beforeTrad, filingStatus||'MFJ', mult);
+      const provAGI_beforeTrad = taxableSSAmt(ssInc, _otherPT, effectiveFilingStatus) + _otherPT;
+      const prov = computeTaxVars(provAGI_beforeTrad, effectiveFilingStatus, mult);
       const targetBracketRate = 0.24; // Target 24% bracket for traditional withdrawals
-      const brackets = BRACKETS[filingStatus || 'MFJ'];
+      const brackets = BRACKETS[effectiveFilingStatus];
       const targetBracket = brackets.find(b => b.r === targetBracketRate);
       const targetTop = targetBracket ? targetBracket.to * mult : prov.room;
       const room = Math.max(0, targetTop - provAGI_beforeTrad);
@@ -1550,8 +1560,8 @@ function project(inp){
     if(rothConversion && tb>0 && fRoth===0){
       // Evaluate multiple bracket fill options and choose the least incremental tax cost
       const _otherPC = nqdcInc + penInc + othInc + rmd + (fTax * xbGainFrac);
-      const provAGI = taxableSSAmt(ssInc, _otherPC, filingStatus||'MFJ') + _otherPC;
-      const evals = evalConversionOptions(provAGI, tb, filingStatus||'MFJ', mult);
+      const provAGI = taxableSSAmt(ssInc, _otherPC, effectiveFilingStatus) + _otherPC;
+      const evals = evalConversionOptions(provAGI, tb, effectiveFilingStatus, mult);
       if(evals && evals.amount>0){
         rothConv = evals.amount;
         const convShare = tb > 0 ? evals.amount / tb : 0;
@@ -1579,15 +1589,15 @@ function project(inp){
     // tot is computed AFTER tax payment below — do not compute here
     // Final AGI (Pass 2) — taxable brokerage: only the gain portion (xbGainFrac) is taxable at LTCG rates
     const _otherAGI = nqdcInc + penInc + othInc + fTrad + (fTax * xbGainFrac) + fHSA + rothConv;
-    const _tssAmt   = taxableSSAmt(ssInc, _otherAGI, filingStatus||'MFJ');
+    const _tssAmt   = taxableSSAmt(ssInc, _otherAGI, effectiveFilingStatus);
     const agi = _tssAmt + _otherAGI;
     // Federal tax computed using CPI-indexed brackets
-    const fed = computeTaxVars(agi, filingStatus||'MFJ', mult);
+    const fed = computeTaxVars(agi, effectiveFilingStatus, mult);
     // State tax — some states don't tax Social Security; exclude SS from state AGI for those states
     const _stateData = STATE_TAX_DATA[RETIREMENT_STATE] || STATE_TAX_DATA.OTHER;
     const stateTaxableAGI = _stateData.taxesSS ? agi : agi - _tssAmt;
-    const stateTax = computeStateTax(stateTaxableAGI, filingStatus||'MFJ', mult);
-    const ltcgRate = agi<(LTCG_0[filingStatus||'MFJ']||96700)?0:agi<(LTCG_15[filingStatus||'MFJ']||583750)?0.15:0.20;
+    const stateTax = computeStateTax(stateTaxableAGI, effectiveFilingStatus, mult);
+    const ltcgRate = agi<(LTCG_0[effectiveFilingStatus]||96700)?0:agi<(LTCG_15[effectiveFilingStatus]||583750)?0.15:0.20;
     // Pay taxes from portfolio — cash first (most liquid), then taxable, then traditional
     // This reflects that taxes are a real cash expense that must come from somewhere
     let taxDue = fed.tax + stateTax;
@@ -1626,8 +1636,8 @@ function project(inp){
       portNeed, fTrad, fTax, fRoth, fCash, fHSA, rothConv,
       actual:fTrad+fTax+fRoth+fCash+fHSA,
       rmd, tb, rb, xb, cb, hb, tot,
-      agi, margRate:fed.margRate, room:fed.room, irmaa:irmaaAdj, irmaaSurcharge, ltcgRate,
-      federalTax:fed.tax, stateTax, provAGI: (()=>{ const _o=nqdcInc+penInc+othInc+rmd+fHSA; return taxableSSAmt(ssInc,_o,filingStatus||'MFJ')+_o; })(), convChoice: chosenConvLabel||null,
+      agi, margRate:fed.margRate, room:fed.room, irmaa:irmaaAdj, irmaaSurcharge, ltcgRate, effectiveFilingStatus,
+      federalTax:fed.tax, stateTax, provAGI: (()=>{ const _o=nqdcInc+penInc+othInc+rmd+fHSA; return taxableSSAmt(ssInc,_o,effectiveFilingStatus)+_o; })(), convChoice: chosenConvLabel||null,
       warnings
     });
     // record MAGI history for IRMAA lookback
